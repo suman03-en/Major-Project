@@ -68,6 +68,7 @@ class RegexFormatter:
         self.current_sec_title = None
         self.current_sub = None
         self.current_clause = None
+        self.is_anusuchi = False
 
     def process_text(self, full_text):
         lines = full_text.split('\n')
@@ -114,8 +115,19 @@ class RegexFormatter:
             if self.current_clause is not None:
                 chunk_type = 'clause'
                 
+            if self.is_anusuchi:
+                if self.current_sec is None and self.current_sub is None and self.current_clause is None:
+                    chunk_type = 'anusuchi'
+                else:
+                    chunk_type = f"anusuchi_{chunk_type}"
+                
             slug_parts = [self.slug_prefix]
-            if self.current_ch is not None: slug_parts.append(f"ch{self.current_ch}")
+            if self.is_anusuchi:
+                if self.current_ch is not None: slug_parts.append(f"anusuchi{self.current_ch}")
+                else: slug_parts.append("anusuchi")
+            else:
+                if self.current_ch is not None: slug_parts.append(f"ch{self.current_ch}")
+                
             if self.current_sec is not None: slug_parts.append(f"sec{self.current_sec}")
             if self.current_sub is not None: slug_parts.append(f"sub{self.current_sub}")
             if self.current_clause is not None: slug_parts.append(f"cl{self.current_clause}")
@@ -162,10 +174,29 @@ class RegexFormatter:
                 else:
                     continue
                 
+            anusuchi_match = re.match(r'^अनुसूची\s*[-–]?\s*([०-९\d]*)(?:\s*\(([क-ज्ञ])\))?', line)
+            if anusuchi_match:
+                save_chunk(" ".join(current_text_block))
+                current_text_block = []
+                self.is_anusuchi = True
+                
+                anusuchi_val = anusuchi_match.group(1)
+                self.current_ch = nepali_to_int(anusuchi_val) if anusuchi_val else 1
+                self.current_ch_title = line
+                self.current_sec = None
+                self.current_sec_title = None
+                self.current_sub = None
+                
+                clause_val = anusuchi_match.group(2)
+                self.current_clause = clause_val if clause_val else None
+                current_text_block.append(line)
+                continue
+                
             ch_match = re.match(r'^परिच्छेद\s*[-–]?\s*([०-९\d]+)', line)
             if ch_match:
                 save_chunk(" ".join(current_text_block))
                 current_text_block = []
+                self.is_anusuchi = False
                 self.current_ch = nepali_to_int(ch_match.group(1))
                 self.current_ch_title = None 
                 self.current_sec = None
