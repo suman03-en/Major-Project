@@ -1,3 +1,21 @@
-.venv
-__pycache__
-*.__pycache__
+# Virtual environment
+.venv/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# IDE
+.vscode/
+.idea/
+
+# OS files
+Thumbs.db
+.DS_Store
+
+# Scratch / test artifacts (development only)
+scratch_*.py
+test_ocr_*.py
+test_ocr_*.txt
+scratch_output.txt

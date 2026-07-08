@@ -10,7 +10,7 @@ The extraction bypasses broken PDF digital text by rendering pages as high-resol
 2. **Tesseract OCR**:
    - Download and install [Tesseract OCR for Windows](https://github.com/UB-Mannheim/tesseract/wiki).
    - During installation, make sure to check the box to install the **Nepali (`nep`) language pack**.
-   - By default, the script looks for Tesseract at `C:\Program Files\Tesseract-OCR\tesseract.exe`. If you install it elsewhere, update the path in `dataset/pipeline/extractor.py`.
+   - By default, the script looks for Tesseract at `C:\Program Files\Tesseract-OCR\tesseract.exe`. If you install it elsewhere, update the path in `src/pipeline/extractor.py`.
 
 ## Installation Setup
 
@@ -22,7 +22,7 @@ The extraction bypasses broken PDF digital text by rendering pages as high-resol
 
 2. Install the required Python packages:
    ```cmd
-   pip install pytesseract pillow PyMuPDF
+   pip install -r requirements.txt
    ```
 
 ## Project Directory Structure
@@ -30,10 +30,13 @@ The extraction bypasses broken PDF digital text by rendering pages as high-resol
 ```text
 Major project/
 │── pdf_extractor.py           # Main orchestration script
+│── requirements.txt           # Python dependencies
 │── README.md                  # This file
+│── .gitignore
 │── input_pdfs/                # 📂 Place your raw Nepali PDFs here!
 │── output_jsons/              # 📂 Generated JSON datasets will appear here
-└── dataset/
+└── src/
+    ├── __init__.py
     ├── pipeline/
     │   ├── __init__.py
     │   ├── extractor.py       # PyMuPDF + Tesseract OCR hybrid logic

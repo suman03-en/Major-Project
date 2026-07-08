@@ -2,9 +2,9 @@ import os
 import glob
 import json
 import re
-from dataset.pipeline.extractor import PdfExtractor
-from dataset.pipeline.cleaner import TextCleaner
-from dataset.pipeline.formatter import RegexFormatter
+from src.pipeline.extractor import PdfExtractor
+from src.pipeline.cleaner import TextCleaner
+from src.pipeline.formatter import RegexFormatter
 
 def extract_metadata_from_text(front_matter_text):
     """
@@ -31,7 +31,7 @@ def extract_metadata_from_text(front_matter_text):
             # Extract year
             year_match = re.search(r'([०-९\d]{4})', line)
             if year_match:
-                from dataset.pipeline.formatter import nepali_to_int
+                from src.pipeline.formatter import nepali_to_int
                 metadata["bs_year"] = nepali_to_int(year_match.group(1))
             break
             
