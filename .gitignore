@@ -1,6 +1,15 @@
 # Virtual environment
 .venv/
 
+#Ignore everything inside these folders
+input_pdfs/*
+output_jsons/*
+
+# But don't ignore the .gitkeep files! 
+# (The '!' means "except")
+!input_pdfs/.gitkeep
+!output_jsons/.gitkeep
+
 # Python cache
 __pycache__/
 *.pyc
