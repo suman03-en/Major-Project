@@ -20,8 +20,9 @@ class PdfExtractor:
         pix = page.get_pixmap(dpi=300)
         img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
         
-        # Use nepali language data
-        text = pytesseract.image_to_string(img, lang='nep')
+        # Use nepali language data with PSM 4 (Assume a single column of text of variable sizes)
+        # to prevent Tesseract from splitting bullet points into a separate column.
+        text = pytesseract.image_to_string(img, lang='nep', config='--psm 4')
         return text
 
     def close(self):
