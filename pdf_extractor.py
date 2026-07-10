@@ -10,6 +10,8 @@ def extract_metadata_from_text(front_matter_text):
     """
     Dynamically extract metadata from the first few pages of the act.
     """
+    from src.pipeline.formatter import nepali_to_int
+
     metadata = {
         "title": "Unknown Act",
         "number": "",
@@ -31,9 +33,76 @@ def extract_metadata_from_text(front_matter_text):
             # Extract year
             year_match = re.search(r'([०-९\d]{4})', line)
             if year_match:
-                from src.pipeline.formatter import nepali_to_int
                 metadata["bs_year"] = nepali_to_int(year_match.group(1))
             break
+
+    # Fallback: if the ऐन-based heuristic didn't find a title,
+    # scan first page lines for common Nepali legal document type keywords.
+    if metadata["title"] == "Unknown Act":
+        # Common document types found on title pages of Nepali legal PDFs
+        doc_type_keywords = [
+            'ऐन', 'निर्देशिका', 'नियमावली', 'विनियमावली', 'कार्यविधि',
+            'आदेश', 'नीति', 'सन्धि', 'सम्झौता', 'अधिनियम', 'संहिता',
+            'मापदण्ड', 'सूचना', 'विज्ञप्ति', 'अधिसूचना'
+        ]
+        # Map keywords to document type values
+        doc_type_map = {
+            'ऐन': 'act', 'निर्देशिका': 'directive', 'नियमावली': 'regulation',
+            'विनियमावली': 'bylaw', 'कार्यविधि': 'procedure', 'आदेश': 'order',
+            'नीति': 'policy', 'सन्धि': 'treaty', 'सम्झौता': 'agreement',
+            'अधिनियम': 'statute', 'संहिता': 'code', 'मापदण्ड': 'standard',
+            'सूचना': 'notice', 'विज्ञप्ति': 'communique', 'अधिसूचना': 'notification'
+        }
+
+        for i, line in enumerate(lines[:15]):
+            matched_keyword = None
+            for keyword in doc_type_keywords:
+                if keyword in line:
+                    matched_keyword = keyword
+                    break
+
+            if matched_keyword:
+                metadata["title"] = line
+                metadata["type"] = doc_type_map.get(matched_keyword, 'act')
+
+                # Check if the year is in the same line
+                year_match = re.search(r'([०-९\d]{4})', line)
+                if year_match:
+                    metadata["bs_year"] = nepali_to_int(year_match.group(1))
+                else:
+                    # Look at the next few lines for a standalone year
+                    # (Note: the cleaner may strip standalone number lines,
+                    # so this may not find it — the date fallback below covers that)
+                    for next_line in lines[i+1:i+4]:
+                        year_match = re.search(r'^[^\d०-९]*([०-९\d]{4})[^\d०-९]*$', next_line)
+                        if year_match:
+                            metadata["bs_year"] = nepali_to_int(year_match.group(1))
+                            break
+
+                # Look for स्वीकृत मिति (approval date) or प्रकाशित मिति (published date)
+                # OCR-tolerant: स्वीकृत may be recognized as स्वीकत, स्वीकुत, etc.
+                for nearby_line in lines[max(0, i-2):i+6]:
+                    date_match = re.search(
+                        r'स्वीक[ृत]+\s*मिति\s*[:\s]*([०-९\d]+[।/][०-९\d]+[।/][०-९\d]+)',
+                        nearby_line
+                    )
+                    if date_match:
+                        metadata["date_commenced"] = date_match.group(1)
+                    pub_match = re.search(
+                        r'प्रकाशित\s*मिति\s*[:\s]*([०-९\d]+[।/][०-९\d]+[।/][०-९\d]+)',
+                        nearby_line
+                    )
+                    if pub_match:
+                        metadata["date_published"] = pub_match.group(1)
+
+                # If year still not found, extract from the date strings
+                if metadata["bs_year"] is None:
+                    date_str = metadata["date_commenced"] or metadata["date_published"]
+                    if date_str:
+                        year_from_date = re.search(r'([०-९\d]{4})', date_str)
+                        if year_from_date:
+                            metadata["bs_year"] = nepali_to_int(year_from_date.group(1))
+                break
             
     # Extract amendments
     amendments_started = False

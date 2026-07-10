@@ -163,13 +163,30 @@ class RegexFormatter:
             self.chunks.append(chunk)
 
         in_front_matter = True
+        non_empty_count = 0
         for i, line in enumerate(lines):
             line = line.strip()
             if not line:
                 continue
                 
             if in_front_matter:
-                if line.startswith('प्रस्तावना') or line.startswith('परिच्छेद') or 'संक्षिप्त नाम' in line:
+                non_empty_count += 1
+                # Original act markers
+                if (line.startswith('प्रस्तावना') or line.startswith('परिच्छेद')
+                        or 'संक्षिप्त नाम' in line):
+                    in_front_matter = False
+                # Gazette / notification markers (scanned image PDFs)
+                elif line in ('सूचना', 'आदेश', 'निर्देशिका', 'विज्ञप्ति',
+                              'अधिसूचना', 'नियमावली'):
+                    in_front_matter = False
+                    current_text_block.append(line)
+                    continue
+                # Numbered section or subsection at the start means content has begun
+                elif re.match(r'^[०-९\d]+\.', line) or re.match(r'^\([०-९\d]+\)', line):
+                    in_front_matter = False
+                # Safety fallback: if no marker found in first 20 non-empty lines,
+                # assume there is no front matter and process everything.
+                elif non_empty_count > 20:
                     in_front_matter = False
                 else:
                     continue
