@@ -118,7 +118,7 @@ def extract_metadata_from_text(front_matter_text):
                 act_name = re.sub(r'[०-९\d]+\s*[।/]\s*[०-९\d]+\s*[।/]\s*[०-९\d]+.*$', '', line).strip()
                 metadata["amended_refs"].append(act_name)
             elif line.startswith('परिच्छेद') or 'प्रमाणीकरण' in line:
-                pass # Maybe end of amendments
+                break # Maybe end of amendments
             
     return metadata
 

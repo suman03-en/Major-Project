@@ -71,18 +71,22 @@ class PdfExtractor:
 
         return binary
 
+    
     def _ocr_page(self, page):
-        """Renders the page to an image, preprocesses it, and performs OCR."""
+        """Renders the page to an image, crops the header region, preprocesses, and performs OCR.
+        """
         # High DPI (300) for better OCR accuracy on scanned documents
         pix = page.get_pixmap(dpi=300)
         img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
 
+        # Crop top header (URL strip) — consistent across all pages/PDFs
+        HEADER_CROP_PCT = 0.07  # top 7% of page height
+        crop_y = int(img.height * HEADER_CROP_PCT)
+        img = img.crop((0, crop_y, img.width, img.height))
+
         # Preprocess the scanned image for cleaner Devanagari recognition
         processed = self._preprocess_for_ocr(img)
 
-        # Use nep (Nepali) language data with:
-        #   --psm 4: Assume a single column of text of variable sizes
-        #   --oem 1: LSTM neural network engine (best for complex scripts like Devanagari)
         text = pytesseract.image_to_string(
             processed,
             lang='nep',
