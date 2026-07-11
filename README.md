@@ -1,3 +1,6 @@
+# RAG for Business Domain in Nepal
+ - It handles query related to business registration process and related questions.
+
 # Nepali Legal PDF Extraction & Structuring Pipeline
 
 This project provides an automated pipeline to extract text from Nepali legal PDFs (which often contain broken Unicode mappings or Preeti-like legacy fonts) and cleanly structure them into a highly nested, hierarchical JSON format optimized for RAG (Retrieval-Augmented Generation) systems.
