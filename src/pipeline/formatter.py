@@ -68,6 +68,7 @@ class RegexFormatter:
         self.current_sec_title = None
         self.current_sub = None
         self.current_clause = None
+        self.is_anusuchi = False
 
     def process_text(self, full_text):
         lines = full_text.split('\n')
@@ -114,8 +115,19 @@ class RegexFormatter:
             if self.current_clause is not None:
                 chunk_type = 'clause'
                 
+            if self.is_anusuchi:
+                if self.current_sec is None and self.current_sub is None and self.current_clause is None:
+                    chunk_type = 'anusuchi'
+                else:
+                    chunk_type = f"anusuchi_{chunk_type}"
+                
             slug_parts = [self.slug_prefix]
-            if self.current_ch is not None: slug_parts.append(f"ch{self.current_ch}")
+            if self.is_anusuchi:
+                if self.current_ch is not None: slug_parts.append(f"anusuchi{self.current_ch}")
+                else: slug_parts.append("anusuchi")
+            else:
+                if self.current_ch is not None: slug_parts.append(f"ch{self.current_ch}")
+                
             if self.current_sec is not None: slug_parts.append(f"sec{self.current_sec}")
             if self.current_sub is not None: slug_parts.append(f"sub{self.current_sub}")
             if self.current_clause is not None: slug_parts.append(f"cl{self.current_clause}")
@@ -151,21 +163,57 @@ class RegexFormatter:
             self.chunks.append(chunk)
 
         in_front_matter = True
+        non_empty_count = 0
         for i, line in enumerate(lines):
             line = line.strip()
             if not line:
                 continue
                 
             if in_front_matter:
-                if line.startswith('प्रस्तावना') or line.startswith('परिच्छेद') or 'संक्षिप्त नाम' in line:
+                non_empty_count += 1
+                # Original act markers
+                if (line.startswith('प्रस्तावना') or line.startswith('परिच्छेद')
+                        or 'संक्षिप्त नाम' in line):
+                    in_front_matter = False
+                # Gazette / notification markers (scanned image PDFs)
+                elif line in ('सूचना', 'आदेश', 'निर्देशिका', 'विज्ञप्ति',
+                              'अधिसूचना', 'नियमावली'):
+                    in_front_matter = False
+                    current_text_block.append(line)
+                    continue
+                # Numbered section or subsection at the start means content has begun
+                elif re.match(r'^[०-९\d]+\.', line) or re.match(r'^\([०-९\d]+\)', line):
+                    in_front_matter = False
+                # Safety fallback: if no marker found in first 20 non-empty lines,
+                # assume there is no front matter and process everything.
+                elif non_empty_count > 20:
                     in_front_matter = False
                 else:
                     continue
+                
+            anusuchi_match = re.match(r'^अनुसूची\s*[-–]?\s*([०-९\d]*)(?:\s*\(([क-ज्ञ])\))?', line)
+            if anusuchi_match:
+                save_chunk(" ".join(current_text_block))
+                current_text_block = []
+                self.is_anusuchi = True
+                
+                anusuchi_val = anusuchi_match.group(1)
+                self.current_ch = nepali_to_int(anusuchi_val) if anusuchi_val else 1
+                self.current_ch_title = line
+                self.current_sec = None
+                self.current_sec_title = None
+                self.current_sub = None
+                
+                clause_val = anusuchi_match.group(2)
+                self.current_clause = clause_val if clause_val else None
+                current_text_block.append(line)
+                continue
                 
             ch_match = re.match(r'^परिच्छेद\s*[-–]?\s*([०-९\d]+)', line)
             if ch_match:
                 save_chunk(" ".join(current_text_block))
                 current_text_block = []
+                self.is_anusuchi = False
                 self.current_ch = nepali_to_int(ch_match.group(1))
                 self.current_ch_title = None 
                 self.current_sec = None
