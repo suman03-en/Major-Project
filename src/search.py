@@ -25,6 +25,7 @@ from typing import Optional
 # ---------------------------------------------------------------------------
 from src.embedding.embedder import LegalChunkEmbedder
 from src.embedding.vector_store import QdrantVectorStore
+from src.config import get_settings
 
 # ---------------------------------------------------------------------------
 # Logging (quiet by default for clean CLI output)
@@ -39,7 +40,7 @@ logger = logging.getLogger("search")
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
-QDRANT_URL = "http://localhost:6333"
+QDRANT_URL = get_settings().QDRANT_URL
 
 
 def format_hierarchy(hierarchy: dict) -> str:

@@ -4,6 +4,7 @@ __pycache__
 
 # Virtual environment
 .venv/
+.env
 
 #Ignore everything inside these folders
 input_pdfs/*
