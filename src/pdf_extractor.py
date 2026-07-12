@@ -1,4 +1,9 @@
+import sys
 import os
+
+# Add project root to python path to allow running directly from src directory
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 import glob
 import json
 import re
@@ -128,8 +133,9 @@ def slugify(filename):
     return re.sub(r'[^a-zA-Z0-9]+', '_', base).strip('_').lower()
 
 def main():
-    input_dir = 'input_pdfs'
-    output_dir = 'output_jsons'
+    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+    input_dir = os.path.join(project_root, 'input_pdfs')
+    output_dir = os.path.join(project_root, 'output_jsons')
     
     os.makedirs(output_dir, exist_ok=True)
     pdf_files = glob.glob(os.path.join(input_dir, '*.pdf'))
