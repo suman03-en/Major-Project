@@ -26,6 +26,7 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 from src.embedding.embedder import LegalChunkEmbedder
 from src.embedding.vector_store import QdrantVectorStore
+from src.config import get_settings
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -42,7 +43,7 @@ logger = logging.getLogger("ingest")
 # ---------------------------------------------------------------------------
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 OUTPUT_JSONS_DIR = os.path.join(PROJECT_ROOT, "output_jsons")
-QDRANT_URL = "http://localhost:6333"
+QDRANT_URL = get_settings().QDRANT_URL
 
 
 def load_datasets(directory: str) -> list[tuple[str, dict]]:
