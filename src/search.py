@@ -5,13 +5,17 @@ Interactive CLI that encodes a user query with BAAI/bge-m3 and retrieves
 the most relevant Nepali legal-text chunks from Qdrant.
 
 Usage:
-    python search.py                      # Interactive REPL
-    python search.py -q "कम्पनी दर्ता"   # One-shot query
-    python search.py --top-k 10           # Return 10 results
+    python src/search.py                      # Interactive REPL
+    python src/search.py -q "कम्पनी दर्ता"   # One-shot query
+    python src/search.py --top-k 10           # Return 10 results
 """
-'''testing'''
-import os
+
 import sys
+import os
+
+# Add project root to python path to allow running directly from src directory
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 import logging
 import argparse
 from typing import Optional
@@ -21,6 +25,7 @@ from typing import Optional
 # ---------------------------------------------------------------------------
 from src.embedding.embedder import LegalChunkEmbedder
 from src.embedding.vector_store import QdrantVectorStore
+from src.config import get_settings
 
 # ---------------------------------------------------------------------------
 # Logging (quiet by default for clean CLI output)
@@ -35,7 +40,7 @@ logger = logging.getLogger("search")
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
-QDRANT_URL = "http://localhost:6333"
+QDRANT_URL = get_settings().QDRANT_URL
 
 
 def format_hierarchy(hierarchy: dict) -> str:

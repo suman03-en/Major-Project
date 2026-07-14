@@ -17,7 +17,7 @@ This project provides an automated, end-to-end pipeline to:
    - During installation, check the box to install the **Nepali (`nep`) language pack**.
    - By default, the script looks for Tesseract at `C:\Program Files\Tesseract-OCR\tesseract.exe`. Update the path in `src/pipeline/extractor.py` if installed elsewhere.
 3. **Qdrant**:
-   - Run Qdrant locally (e.g., via Docker: `docker run -p 6333:6333 qdrant/qdrant`) or download the Windows executable. It must be running on `http://localhost:6333` for the search to work.
+   - Run Qdrant locally (e.g., via Docker: `docker run -p 6333:6333 qdrant/qdrant`) or download the Windows executable.
 
 ## Installation Setup
 
@@ -33,18 +33,25 @@ This project provides an automated, end-to-end pipeline to:
    pip install FlagEmbedding
    ```
 
+3. Create a `.env` file in the root directory and add your Qdrant URL:
+   ```env
+   QDRANT_URL="http://localhost:6333"
+   ```
+
 ## Project Directory Structure
 
 ```text
 Major project/
-│── pdf_extractor.py           # Main orchestration script for PDF extraction
-│── ingest.py                  # Script to embed JSONs and upsert to Qdrant
-│── search.py                  # Interactive CLI for testing RAG search
 │── requirements.txt           # Python dependencies
 │── README.md                  # This file
+│── .env                       # Environment configuration (e.g., Qdrant URL)
 │── input_pdfs/                # 📂 Place your raw Nepali PDFs here!
 │── output_jsons/              # 📂 Generated JSON datasets appear here
 └── src/
+    │── config.py              # Configuration and settings loader
+    │── pdf_extractor.py       # Main orchestration script for PDF extraction
+    │── ingest.py              # Script to embed JSONs and upsert to Qdrant
+    │── search.py              # Interactive CLI for testing RAG search
     ├── pipeline/
     │   ├── extractor.py       # PyMuPDF + Tesseract OCR hybrid logic
     │   ├── cleaner.py         # Regex-based text artifact cleaner
@@ -60,22 +67,22 @@ Major project/
 1. Place one or more Nepali legal PDF files (e.g., `company_act.pdf`) into the `input_pdfs/` directory.
 2. Run the main extraction script:
    ```cmd
-   python pdf_extractor.py
+   python src/pdf_extractor.py
    ```
    *This extracts text using OCR, builds the document hierarchy (Chapters, Sections, etc.), and outputs to `output_jsons/`.*
 
 ### 2. Embed and Ingest Data
-1. Ensure your Qdrant server is running on `localhost:6333`.
+1. Ensure your Qdrant server is running and the URL matches your `.env` configuration.
 2. Run the ingestion script to embed the chunks into dense and sparse vectors, and upsert them to Qdrant:
    ```cmd
-   python ingest.py
+   python src/ingest.py
    ```
-   *(To wipe the database and start fresh, run `python ingest.py --recreate`)*
+   *(To wipe the database and start fresh, run `python src/ingest.py --recreate`)*
 
 ### 3. Search the Database
 Use the interactive REPL to test vector retrieval:
 ```cmd
-python search.py
+python src/search.py
 ```
 Inside the REPL, you can dynamically adjust search parameters:
 - `top <N>`: Change how many results are returned (e.g., `top 10`).

@@ -5,12 +5,16 @@ Reads all JSON datasets from ``output_jsons/``, embeds each chunk using
 BAAI/bge-m3, and upserts the vectors into Qdrant.
 
 Usage:
-    python ingest.py                      # Ingest all datasets
-    python ingest.py --recreate           # Drop & recreate collection first
+    python src/ingest.py                      # Ingest all datasets
+    python src/ingest.py --recreate           # Drop & recreate collection first
 """
 
-import os
 import sys
+import os
+
+# Add project root to python path to allow running directly from src directory
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 import glob
 import json
 import logging
@@ -22,6 +26,7 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 from src.embedding.embedder import LegalChunkEmbedder
 from src.embedding.vector_store import QdrantVectorStore
+from src.config import get_settings
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -36,8 +41,9 @@ logger = logging.getLogger("ingest")
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
-OUTPUT_JSONS_DIR = "output_jsons"
-QDRANT_URL = "http://localhost:6333"
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+OUTPUT_JSONS_DIR = os.path.join(PROJECT_ROOT, "output_jsons")
+QDRANT_URL = get_settings().QDRANT_URL
 
 
 def load_datasets(directory: str) -> list[tuple[str, dict]]:
