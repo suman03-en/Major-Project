@@ -1,13 +1,16 @@
 """
 Search Script
 =============
-Interactive CLI that encodes a user query with BAAI/bge-m3 and retrieves
-the most relevant Nepali legal-text chunks from Qdrant.
+Interactive CLI that encodes a user query with BAAI/bge-m3, retrieves
+the most relevant Nepali legal-text chunks from Qdrant, and optionally
+re-ranks candidates using a BAAI/bge-reranker-v2-m3 cross-encoder for
+higher accuracy.
 
 Usage:
-    python src/search.py                      # Interactive REPL
+    python src/search.py                      # Interactive REPL (with re-ranking)
     python src/search.py -q "कम्पनी दर्ता"   # One-shot query
     python src/search.py --top-k 10           # Return 10 results
+    python src/search.py --no-rerank          # Disable cross-encoder re-ranking
 """
 
 import sys
@@ -25,6 +28,7 @@ from typing import Optional
 # ---------------------------------------------------------------------------
 from src.embedding.embedder import LegalChunkEmbedder
 from src.embedding.vector_store import QdrantVectorStore
+from src.embedding.reranker import CrossEncoderReranker
 from src.config import get_settings
 
 # ---------------------------------------------------------------------------
@@ -57,11 +61,12 @@ def format_hierarchy(hierarchy: dict) -> str:
     return " → ".join(parts) if parts else "—"
 
 
-def display_results(results: list[dict], query: str) -> None:
+def display_results(results: list[dict], query: str, reranked: bool = False) -> None:
     """Pretty-print search results to stdout."""
+    mode_label = "re-ranked" if reranked else "retrieval"
     print(f"\n{'─' * 70}")
-    print(f"  Query: {query}")
-    print(f"  Results: {len(results)}")
+    print(f"  Query   : {query}")
+    print(f"  Results : {len(results)}  ({mode_label})")
     print(f"{'─' * 70}")
 
     if not results:
@@ -69,7 +74,6 @@ def display_results(results: list[dict], query: str) -> None:
         return
 
     for i, hit in enumerate(results, 1):
-        score = hit["score"]
         chunk_id = hit["chunk_id"]
         act_source = hit["act_source"]
         hierarchy = hit.get("hierarchy", {})
@@ -78,13 +82,29 @@ def display_results(results: list[dict], query: str) -> None:
         # Truncate long text for display
         display_text = text if len(text) <= 300 else text[:300] + "..."
 
-        print(f"\n  [{i}]  Score: {score:.4f}")
+        # Show cross-encoder score when available, with original score.
+        if "rerank_score" in hit:
+            score_line = (
+                f"Score: {hit['rerank_score']:.4f} (rerank)  "
+                f"│ {hit['original_score']:.4f} (retrieval)"
+            )
+        else:
+            score_line = f"Score: {hit['score']:.4f}"
+
+        print(f"\n  [{i}]  {score_line}")
         print(f"       Act   : {act_source}")
         print(f"       ID    : {chunk_id}")
         print(f"       Path  : {format_hierarchy(hierarchy)}")
         print(f"       Text  : {display_text}")
 
     print(f"\n{'─' * 70}\n")
+
+
+# ---------------------------------------------------------------------------
+# Over-fetch multiplier: when re-ranking is active, we retrieve this many
+# times more candidates from Qdrant so the cross-encoder has a richer pool.
+# ---------------------------------------------------------------------------
+RERANK_FETCH_MULTIPLIER: int = 4
 
 
 def run_search(
@@ -94,19 +114,28 @@ def run_search(
     search_type: str = "hybrid",
     top_k: int = 5,
     act_filter: Optional[str] = None,
+    reranker: Optional[CrossEncoderReranker] = None,
 ) -> list[dict]:
-    """Encode query (dense & sparse) and search Qdrant."""
+    """Encode query (dense & sparse), search Qdrant, and optionally re-rank."""
     embeddings = embedder.embed_texts([query])
     query_dense = embeddings["dense_vecs"][0].tolist()
     query_sparse = embeddings["lexical_weights"][0]
-    
+
+    # When re-ranking, over-fetch candidates for a richer candidate pool.
+    fetch_k = top_k * RERANK_FETCH_MULTIPLIER if reranker else top_k
+
     results = store.search(
         query_dense=query_dense,
         query_sparse=query_sparse,
         search_type=search_type,
-        top_k=top_k,
+        top_k=fetch_k,
         act_filter=act_filter,
     )
+
+    # Stage 2: Cross-encoder re-ranking.
+    if reranker and results:
+        results = reranker.rerank(query=query, candidates=results, top_k=top_k)
+
     return results
 
 
@@ -116,6 +145,7 @@ def interactive_mode(
     search_type: str,
     top_k: int,
     act_filter: Optional[str],
+    reranker: Optional[CrossEncoderReranker] = None,
 ) -> None:
     """Run the interactive REPL search loop."""
     # Show collection stats on startup
@@ -128,14 +158,19 @@ def interactive_mode(
         print(f"\n  ⚠  Could not reach Qdrant: {exc}")
         sys.exit(1)
 
+    rerank_active = reranker is not None
+
     print(f"\n  Type your query in Nepali or English.")
-    print(f"  Commands: 'exit'/'quit' to leave, 'top <N>' to change count, 'type <dense|sparse|hybrid>' to change search type.\n")
+    print(f"  Commands: 'exit'/'quit' to leave, 'top <N>' to change count,")
+    print(f"            'type <dense|sparse|hybrid>' to change search type,")
+    print(f"            'rerank on/off' to toggle cross-encoder re-ranking.\n")
 
     current_type = search_type
     
     while True:
+        rerank_tag = "+rerank" if rerank_active else ""
         try:
-            query = input(f"  🔍 Query ({current_type}) > ").strip()
+            query = input(f"  🔍 Query ({current_type}{rerank_tag}) > ").strip()
         except (EOFError, KeyboardInterrupt):
             print("\n  Goodbye!\n")
             break
@@ -165,13 +200,33 @@ def interactive_mode(
                 print("  Usage: type <dense|sparse|hybrid>\n")
             continue
 
-        results = run_search(embedder, store, query, current_type, top_k, act_filter)
-        display_results(results, query)
+        # Allow toggling cross-encoder re-ranking: "rerank on" / "rerank off"
+        if query.lower().startswith("rerank "):
+            toggle = query.split()[1].lower()
+            if toggle == "on" and reranker is not None:
+                rerank_active = True
+                print("  ✓ Cross-encoder re-ranking enabled.\n")
+            elif toggle == "on" and reranker is None:
+                print("  ⚠  Reranker was not loaded (started with --no-rerank).\n")
+            elif toggle == "off":
+                rerank_active = False
+                print("  ✓ Cross-encoder re-ranking disabled.\n")
+            else:
+                print("  Usage: rerank <on|off>\n")
+            continue
+
+        active_reranker = reranker if rerank_active else None
+        results = run_search(
+            embedder, store, query, current_type, top_k, act_filter,
+            reranker=active_reranker,
+        )
+        display_results(results, query, reranked=active_reranker is not None)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Search Nepali legal chunks in Qdrant using BAAI/bge-m3."
+        description="Search Nepali legal chunks in Qdrant using BAAI/bge-m3 "
+                    "with optional cross-encoder re-ranking.",
     )
     parser.add_argument(
         "-q", "--query",
@@ -203,20 +258,41 @@ def main() -> None:
         default=QDRANT_URL,
         help="Qdrant server URL (default: %(default)s).",
     )
+    parser.add_argument(
+        "--no-rerank",
+        action="store_true",
+        help="Disable cross-encoder re-ranking (faster, less accurate).",
+    )
     args = parser.parse_args()
 
-    # ── Initialize ──────────────────────────────────────────────────────
-    print("\n  Loading BAAI/bge-m3 model... (first run downloads ~2 GB)")
+    # ── Initialize embedder ─────────────────────────────────────────────
+    print("\n  Loading BAAI/bge-m3 embedder... (first run downloads ~2 GB)")
     embedder = LegalChunkEmbedder(show_progress=False)
     store = QdrantVectorStore(url=args.qdrant_url)
-    print("  Model ready.\n")
+    print("  Embedder ready.")
+
+    # ── Initialize cross-encoder reranker ───────────────────────────────
+    reranker: Optional[CrossEncoderReranker] = None
+    if not args.no_rerank:
+        print("  Loading cross-encoder reranker (BAAI/bge-reranker-v2-m3)...")
+        reranker = CrossEncoderReranker()
+        print("  Reranker ready.")
+    else:
+        print("  Cross-encoder re-ranking disabled (--no-rerank).")
+    print()
 
     # ── One-shot or interactive ─────────────────────────────────────────
     if args.query:
-        results = run_search(embedder, store, args.query, args.type, args.top_k, args.act)
-        display_results(results, args.query)
+        results = run_search(
+            embedder, store, args.query, args.type, args.top_k, args.act,
+            reranker=reranker,
+        )
+        display_results(results, args.query, reranked=reranker is not None)
     else:
-        interactive_mode(embedder, store, args.type, args.top_k, args.act)
+        interactive_mode(
+            embedder, store, args.type, args.top_k, args.act,
+            reranker=reranker,
+        )
 
 
 if __name__ == "__main__":
