@@ -163,6 +163,7 @@ class RegexFormatter:
             self.chunks.append(chunk)
 
         in_front_matter = True
+        seen_amendment_header = False
         non_empty_count = 0
         for i, line in enumerate(lines):
             line = line.strip()
@@ -171,6 +172,11 @@ class RegexFormatter:
                 
             if in_front_matter:
                 non_empty_count += 1
+
+                if line.startswith('संशोधन गर्ने ऐन'):      
+                    seen_amendment_header = True
+                    continue
+
                 # Original act markers
                 if (line.startswith('प्रस्तावना') or line.startswith('परिच्छेद')
                         or 'संक्षिप्त नाम' in line):
@@ -181,9 +187,12 @@ class RegexFormatter:
                     in_front_matter = False
                     current_text_block.append(line)
                     continue
+
                 # Numbered section or subsection at the start means content has begun
-                elif re.match(r'^[०-९\d]+\.', line) or re.match(r'^\([०-९\d]+\)', line):
-                    in_front_matter = False
+                elif not seen_amendment_header and (                    # CHANGED: added "not seen_amendment_header and"
+                    re.match(r'^[०-९\d]+\.', line) or re.match(r'^\([०-९\d]+\)', line)):
+                        in_front_matter = False
+                        
                 # Safety fallback: if no marker found in first 20 non-empty lines,
                 # assume there is no front matter and process everything.
                 elif non_empty_count > 20:
