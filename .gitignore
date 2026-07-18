@@ -37,3 +37,4 @@ test_ocr_*.py
 test_ocr_*.txt
 test_extractor.py
 scratch_output.txt
+REPORT_EMBEDDING.md
