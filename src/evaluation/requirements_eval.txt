@@ -1,9 +1,0 @@
-google-genai
-python-dotenv
-FlagEmbedding
-torch
-transformers
-pandas
-tqdm
-numpy
-scikit-learn
