@@ -83,20 +83,20 @@ def load_data(project_root):
     print(f"  Corpus loaded: {len(corpus)} chunks")
 
     # --- Load Golden Dataset ---
-    golden_path = project_root / "src" / "evaluation" / "golden_dataset.json"
-    if not golden_path.exists():
-        print(f"  ERROR: Golden dataset not found at {golden_path}")
+    gold_ds_path = project_root / "src" / "evaluation" / "gold_dataset.json"
+    if not gold_ds_path.exists():
+        print(f"  ERROR: Golden dataset not found at {gold_ds_path}")
         sys.exit(1)
 
     queries = {}
     qrels = collections.defaultdict(dict)
     skipped = []
-    matched_golden_entries = []
+    matched_gold_entries = []
 
-    with open(golden_path, "r", encoding="utf-8") as f:
-        golden_data = json.load(f)
+    with open(gold_ds_path, "r", encoding="utf-8") as f:
+        gold_data = json.load(f)
 
-    for i, item in enumerate(golden_data):
+    for i, item in enumerate(gold_data):
         docid = item["relevant_part_in_doc"]
 
         # Validate that the document ID exists in the corpus
@@ -104,14 +104,14 @@ def load_data(project_root):
             skipped.append(docid)
             continue
 
-        qid = f"q_{len(matched_golden_entries)}"
+        qid = f"q_{len(matched_gold_entries)}"
         queries[qid] = item["query"]
         qrels[qid][docid] = 1
-        matched_golden_entries.append(item)
+        matched_gold_entries.append(item)
 
     print(f"  Golden dataset loaded: {len(queries)} valid queries")
 
-    # Remove unmatched entries from the golden dataset file
+    # Remove unmatched entries from the gold dataset file
     if skipped:
         print(f"  WARNING: {len(skipped)} queries had doc IDs not found in corpus")
         for uid in skipped[:5]:
@@ -119,11 +119,11 @@ def load_data(project_root):
         if len(skipped) > 5:
             print(f"    ... and {len(skipped) - 5} more")
 
-        # Overwrite golden_dataset.json with only matched entries
-        with open(golden_path, "w", encoding="utf-8") as f:
-            json.dump(matched_golden_entries, f, indent=2, ensure_ascii=False)
-        print(f"  CLEANED: Removed {len(skipped)} unmatched entries from golden_dataset.json")
-        print(f"  Golden dataset now has {len(matched_golden_entries)} entries")
+        # Overwrite gold_dataset.json with only matched entries
+        with open(gold_ds_path, "w", encoding="utf-8") as f:
+            json.dump(matched_gold_entries, f, indent=2, ensure_ascii=False)
+        print(f"  CLEANED: Removed {len(skipped)} unmatched entries from gold_dataset.json")
+        print(f"  Gold dataset now has {len(matched_gold_entries)} entries")
 
     return corpus, queries, qrels
 

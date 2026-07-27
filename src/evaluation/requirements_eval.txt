@@ -1,7 +1,6 @@
 google-genai
 python-dotenv
 FlagEmbedding
-sentence-transformers
 torch
 transformers
 pandas
