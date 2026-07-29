@@ -1,0 +1,6 @@
+.venv
+.env
+compose.yaml
+Dockerfile
+README.md
+__pycache__
