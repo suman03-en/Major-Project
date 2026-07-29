@@ -1,0 +1,1 @@
+# This document tracks the progress of processed documents.
