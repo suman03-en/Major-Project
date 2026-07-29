@@ -3,4 +3,12 @@
 compose.yaml
 Dockerfile
 README.md
-__pycache__
+
+.git
+.gitignore
+__pycache__/
+*.pyc
+.venv/
+.env
+qdrant_storage/
+output_jsons/

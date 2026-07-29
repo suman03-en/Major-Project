@@ -1,11 +1,13 @@
-PyMuPDF
-pytesseract
-Pillow
-matplotlib
-numpy
-torch
-tqdm
-FlagEmbedding
-transformers
-qdrant-client
-python-dotenv
+pymupdf==1.28.0
+pytesseract==0.3.13
+pillow==12.3.0
+matplotlib==3.11.1
+numpy==2.5.1
+tqdm==4.68.4
+FlagEmbedding==1.4.0
+transformers==5.13.0
+qdrant-client==1.18.0
+python-dotenv==1.2.2
+
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.13.0
