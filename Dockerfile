@@ -1,4 +1,4 @@
-FROM python:3.11-slim
+FROM python:3.13-slim
 
 WORKDIR /app
 
@@ -8,11 +8,14 @@ ENV PATH="/venv/bin:$PATH"
 RUN pip install --upgrade pip
 
 COPY requirements.txt .
-RUN pip install -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
+# Copy the entrypoint script
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 
-CMD ["python3", "src/cli/search.py"]
+ENTRYPOINT ["/entrypoint.sh"]
 
 
 
