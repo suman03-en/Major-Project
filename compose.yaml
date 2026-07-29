@@ -1,0 +1,9 @@
+services:
+  rag:
+    build: .
+    volumes: 
+      - ./input_pdfs:/app/input_pdfs
+      - ./output_jsons:/app/output_jsons
+    
+    
+      
