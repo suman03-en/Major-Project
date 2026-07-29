@@ -6,19 +6,24 @@ services:
       - qdrant_storage:/qdrant/storage
     ports:
       - "6333:6333"
+
   rag:
     build: .
-    volumes: 
+    container_name: rag
+    stdin_open: true
+    tty: true
+    volumes:
       - ./input_pdfs:/app/input_pdfs
       - ./output_jsons:/app/output_jsons
+      - ./datasets:/app/datasets
+      - huggingface_cache:/root/.cache/huggingface
     env_file:
       - .env
     environment:
-      - RUN_INGEST=True
+      - RUN_INGEST=false
     depends_on:
       - qdrant
 
 volumes:
   qdrant_storage:
-
-      
+  huggingface_cache:
