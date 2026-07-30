@@ -2,21 +2,21 @@ import sys
 import os
 
 # Add project root to python path to allow running directly from src directory
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 
 import glob
 import json
 import re
-from src.pipeline.extractor import PdfExtractor
-from src.pipeline.cleaner import TextCleaner
-from src.pipeline.formatter import RegexFormatter
+from src.extraction.extractor import PdfExtractor
+from src.extraction.cleaner import TextCleaner
+from src.extraction.formatter import RegexFormatter
 
 
 def extract_metadata_from_text(front_matter_text):
     """
     Dynamically extract metadata from the first few pages of the act.
     """
-    from src.pipeline.formatter import nepali_to_int
+    from src.extraction.formatter import nepali_to_int
 
     metadata = {
         "title": "Unknown Act",
@@ -195,7 +195,7 @@ def slugify(filename):
 
 
 def main():
-    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
     input_dir = os.path.join(project_root, "input_pdfs")
     output_dir = os.path.join(project_root, "output_jsons")
 

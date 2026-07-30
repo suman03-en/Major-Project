@@ -38,6 +38,44 @@ This project provides an automated, end-to-end pipeline to:
    QDRANT_URL="http://localhost:6333"
    ```
 
+---
+
+## Docker Setup (Alternative)
+
+If you prefer using Docker, a `compose.yaml` file is provided to run both Qdrant and the pipeline in containerized environments. This skips the need to manually install Python, Tesseract OCR, or setup system variables.
+
+### 1. Build and Run the Services
+Start the services in the background:
+```bash
+docker compose up -d
+```
+*Note: This will start a local Qdrant container and build the RAG pipeline container.*
+
+### 2. Configure Ingestion Behavior
+In `compose.yaml`, under the `rag` service environment section, you can configure whether to run the ingestion script automatically when starting the container:
+- `RUN_INGEST=true`: Will automatically search `output_jsons/` and embed/ingest files into Qdrant.
+- `RUN_INGEST=false`: Skips ingestion (useful when you want to execute manual commands).
+
+### 3. Running Scripts inside Docker
+Once the containers are running, you can run the pipeline scripts using `docker compose exec`:
+
+* **Extract PDFs to JSON:**
+  ```bash
+  docker compose exec rag python src/cli/pdf_extractor.py
+  ```
+* **Embed and Ingest Data:**
+  ```bash
+  docker compose exec rag python src/cli/ingest.py
+  # Or to recreate collection:
+  docker compose exec rag python src/cli/ingest.py --recreate
+  ```
+* **Search the Database (Interactive REPL):**
+  ```bash
+  docker compose exec rag python src/cli/search.py
+  # Or to skip the cross-encoder reranker:
+  docker compose exec rag python src/cli/search.py --no-rerank
+  ```
+
 ## Project Directory Structure
 
 ```text

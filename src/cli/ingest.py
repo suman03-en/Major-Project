@@ -13,7 +13,7 @@ import sys
 import os
 
 # Add project root to python path to allow running directly from src directory
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 
 import glob
 import json
@@ -41,7 +41,7 @@ logger = logging.getLogger("ingest")
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
-PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 OUTPUT_JSONS_DIR = os.path.join(PROJECT_ROOT, "output_jsons")
 QDRANT_URL = get_settings().QDRANT_URL
 
