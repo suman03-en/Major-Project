@@ -6,6 +6,11 @@ __pycache__
 .venv/
 .env
 
+#ignore agents rules files
+.ai/rules/*
+.agents/*
+.agents/rules/
+
 #Ignore everything inside these folders
 input_pdfs/*
 output_jsons/*

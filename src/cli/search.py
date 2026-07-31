@@ -17,7 +17,7 @@ import sys
 import os
 
 # Add project root to python path to allow running directly from src directory
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 
 import logging
 import argparse

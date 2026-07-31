@@ -1,0 +1,13 @@
+.venv
+.venv/
+.env
+.git
+.gitignore
+__pycache__/
+*.pyc
+
+compose.yaml
+Dockerfile
+README.md
+
+qdrant_storage/
