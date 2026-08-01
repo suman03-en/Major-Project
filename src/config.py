@@ -1,3 +1,4 @@
+import http
 import os
 from dataclasses import dataclass
 from dotenv import load_dotenv
@@ -11,7 +12,7 @@ class Settings:
     
 def get_settings() -> Settings:
     """Generate settings from environment"""
-    qdrant_url = os.getenv("QDRANT_URL")
+    qdrant_url = "http://localhost:6333"  # Default value
     if not qdrant_url:
         raise ValueError("QDRANT_URL is not defined in environment variables")
     
