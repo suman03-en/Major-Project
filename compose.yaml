@@ -20,7 +20,7 @@ services:
     env_file:
       - .env
     environment:
-      - RUN_INGEST=false
+      - RUN_INGEST=true
     depends_on:
       - qdrant
 
