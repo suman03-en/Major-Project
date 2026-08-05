@@ -20,7 +20,10 @@ services:
     env_file:
       - .env
     environment:
-      - RUN_INGEST=false
+      - RUN_EXTRACT=${RUN_EXTRACT:-false}
+      - RUN_INGEST=${RUN_INGEST:-false}
+      - RECREATE_COLLECTION=${RECREATE_COLLECTION:-false}
+      - ENABLE_RERANK=${ENABLE_RERANK:-false}
     depends_on:
       - qdrant
 

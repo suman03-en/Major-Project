@@ -1,11 +1,15 @@
+import os
 import fitz
 import pytesseract
 from PIL import Image, ImageFilter, ImageOps
 
 class PdfExtractor:
-    def __init__(self, pdf_path, tesseract_cmd=r'C:\Program Files\Tesseract-OCR\tesseract.exe'):
+    def __init__(self, pdf_path, tesseract_cmd=None):
         self.pdf_path = pdf_path
-        pytesseract.pytesseract.tesseract_cmd = tesseract_cmd
+        if tesseract_cmd:
+            pytesseract.pytesseract.tesseract_cmd = tesseract_cmd
+        elif os.name == 'nt' and os.path.exists(r'C:\Program Files\Tesseract-OCR\tesseract.exe'):
+            pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
         self.doc = fitz.open(pdf_path)
 
     def extract_all_pages(self):
