@@ -258,10 +258,12 @@ def main() -> None:
         default=QDRANT_URL,
         help="Qdrant server URL (default: %(default)s).",
     )
+    env_rerank_disabled = os.getenv("ENABLE_RERANK", "true").lower() in ("false", "0", "no", "off")
     parser.add_argument(
         "--no-rerank",
         action="store_true",
-        help="Disable cross-encoder re-ranking (faster, less accurate).",
+        default=env_rerank_disabled,
+        help="Disable cross-encoder re-ranking (faster, less memory).",
     )
     args = parser.parse_args()
 
