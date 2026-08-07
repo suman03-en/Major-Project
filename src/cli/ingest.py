@@ -1,7 +1,7 @@
 """
 Ingestion Script
 ================
-Reads all JSON datasets from ``output_jsons/``, embeds each chunk using
+Reads all JSON datasets from ``extracted_jsons/``, embeds each chunk using
 BAAI/bge-m3, and upserts the vectors into Qdrant.
 
 Usage:
@@ -42,7 +42,7 @@ logger = logging.getLogger("ingest")
 # Config
 # ---------------------------------------------------------------------------
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
-OUTPUT_JSONS_DIR = os.path.join(PROJECT_ROOT, "output_jsons")
+EXTRACTED_JSONS_DIR = get_settings().EXTRACTED_JSONS_DIR
 QDRANT_URL = get_settings().QDRANT_URL
 
 
@@ -73,7 +73,7 @@ def load_datasets(directory: str) -> list[tuple[str, dict]]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Embed output_jsons and upsert into Qdrant."
+        description="Embed extracted_jsons and upsert into Qdrant."
     )
     parser.add_argument(
         "--recreate",
@@ -88,9 +88,9 @@ def main() -> None:
     args = parser.parse_args()
 
     # ── 1. Load datasets ────────────────────────────────────────────────
-    datasets = load_datasets(OUTPUT_JSONS_DIR)
+    datasets = load_datasets(EXTRACTED_JSONS_DIR)
     if not datasets:
-        logger.error("Nothing to ingest. Place *_dataset.json files in %s/", OUTPUT_JSONS_DIR)
+        logger.error("Nothing to ingest. Place *_dataset.json files in %s/", EXTRACTED_JSONS_DIR)
         sys.exit(1)
 
     # ── 2. Initialize embedder & vector store ───────────────────────────
