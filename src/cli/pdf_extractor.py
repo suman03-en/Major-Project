@@ -10,6 +10,7 @@ import re
 from src.extraction.extractor import PdfExtractor
 from src.extraction.cleaner import TextCleaner
 from src.extraction.formatter import RegexFormatter
+from src.config import get_settings
 
 
 def extract_metadata_from_text(front_matter_text):
@@ -195,9 +196,9 @@ def slugify(filename):
 
 
 def main():
-    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-    input_dir = os.path.join(project_root, "input_pdfs")
-    output_dir = os.path.join(project_root, "output_jsons")
+    settings = get_settings()
+    input_dir = os.path.join(settings.BASE_DIR, "input_pdfs")
+    output_dir = settings.EXTRACTED_JSONS_DIR
 
     os.makedirs(output_dir, exist_ok=True)
     pdf_files = glob.glob(os.path.join(input_dir, "*.pdf"))
