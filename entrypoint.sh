@@ -35,6 +35,7 @@ else
     echo "Commands you can run inside container:"
     echo "  Extract PDFs  : docker compose exec rag python src/cli/pdf_extractor.py"
     echo "  Ingest JSONs  : docker compose exec rag python src/cli/ingest.py"
+    echo "  Run NER       : docker compose exec rag python -m src.cli.extract_ner --input extracted_jsons/<file>.json"
     echo "  Search CLI    : docker compose exec -it rag python src/cli/search.py"
     echo ""
     tail -f /dev/null

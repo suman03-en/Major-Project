@@ -14,7 +14,8 @@ services:
     tty: true
     volumes:
       - ./input_pdfs:/app/input_pdfs
-      - ./output_jsons:/app/output_jsons
+      - ./extracted_jsons:/app/extracted_jsons
+      - ./ner_outputs:/app/ner_outputs
       - ./datasets:/app/datasets
       - huggingface_cache:/root/.cache/huggingface
     env_file:
