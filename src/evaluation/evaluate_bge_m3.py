@@ -70,7 +70,7 @@ def detect_device():
 def load_data(project_root):
     """Load corpus, queries, and qrels from the project files."""
     # --- Load Corpus ---
-    corpus_path = project_root / "output_jsons" / "comapy_act_dataset.json"
+    corpus_path = project_root / "extracted_jsons" / "comapy_act_dataset.json"
     if not corpus_path.exists():
         print(f"  ERROR: Corpus file not found at {corpus_path}")
         sys.exit(1)

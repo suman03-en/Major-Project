@@ -1,134 +1,174 @@
 # RAG for Business Domain in Nepal
-- It handles queries related to the business registration process and related legal questions in Nepal.
+- Handles queries related to business registration processes, acts, regulations, and related legal questions in Nepal.
 
 # Nepali Legal PDF Extraction, Embedding & Search Pipeline
 
 This project provides an automated, end-to-end pipeline to:
-1. Extract text from Nepali legal PDFs (handling broken Unicode mappings and legacy fonts via OCR).
-2. Clean and structure the text into a highly nested, hierarchical JSON format.
-3. Embed the structural chunks using **BAAI/bge-m3** (Dense + Sparse representations).
-4. Store and retrieve them using the **Qdrant** vector database with **Reciprocal Rank Fusion (RRF) Hybrid Search**.
-
-## Prerequisites
-
-1. **Python 3.10+** installed on your system.
-2. **Tesseract OCR**:
-   - Download and install [Tesseract OCR for Windows](https://github.com/UB-Mannheim/tesseract/wiki).
-   - During installation, check the box to install the **Nepali (`nep`) language pack**.
-   - By default, the script looks for Tesseract at `C:\Program Files\Tesseract-OCR\tesseract.exe`. Update the path in `src/pipeline/extractor.py` if installed elsewhere.
-3. **Qdrant**:
-   - Run Qdrant locally (e.g., via Docker: `docker run -p 6333:6333 qdrant/qdrant`) or download the Windows executable.
-
-## Installation Setup
-
-1. Create a virtual environment (recommended):
-   ```cmd
-   python -m venv .venv
-   .\.venv\Scripts\activate
-   ```
-
-2. Install the required Python packages (including `FlagEmbedding` for multi-vector BGE-M3):
-   ```cmd
-   pip install -r requirements.txt
-   pip install FlagEmbedding
-   ```
-
-3. Create a `.env` file in the root directory and add your Qdrant URL:
-   ```env
-   QDRANT_URL="http://localhost:6333"
-   ```
+1. **Extract text** from Nepali legal PDFs (handling scanned pages, broken Unicode mappings, and legacy fonts via PyMuPDF + Tesseract OCR with 300 DPI Devanagari preprocessing).
+2. **Clean & structure** raw text into a highly nested, hierarchical JSON format (`Act -> Chapter -> Section -> Sub-section -> Clause -> Provisos/Explanations`).
+3. **Embed** structural chunks using **BAAI/bge-m3** (generating 1024-dim Dense vectors + Sparse lexical weights).
+4. **Store & Retrieve** chunks using **Qdrant** vector database with **Reciprocal Rank Fusion (RRF) Hybrid Search** and optional **BAAI/bge-reranker-v2-m3 Cross-Encoder Re-ranking**.
 
 ---
 
-## Docker Setup (Alternative)
+## 🚀 Docker Setup (Recommended)
 
-If you prefer using Docker, a `compose.yaml` file is provided to run both Qdrant and the pipeline in containerized environments. This skips the need to manually install Python, Tesseract OCR, or setup system variables.
+Using Docker is the easiest way to run the pipeline. The Docker setup uses Astral's ultra-fast **`uv`** package manager and pre-installs **Tesseract OCR** with the Nepali (`nep`) language pack inside the container. No local Python or Tesseract installation is needed on your host machine!
 
-### 1. Build and Run the Services
-Start the services in the background:
+### 1. Build and Start Services
+Start Qdrant and the RAG container in the background:
 ```bash
 docker compose up -d
 ```
-*Note: This will start a local Qdrant container and build the RAG pipeline container.*
+*(To force rebuild after code changes, use `docker compose up -d --build`)*
 
-### 2. Configure Ingestion Behavior
-In `compose.yaml`, under the `rag` service environment section, you can configure whether to run the ingestion script automatically when starting the container:
-- `RUN_INGEST=true`: Will automatically search `output_jsons/` and embed/ingest files into Qdrant.
-- `RUN_INGEST=false`: Skips ingestion (useful when you want to execute manual commands).
+---
 
-### 3. Running Scripts inside Docker
-Once the containers are running, you can run the pipeline scripts using `docker compose exec`:
+### 2. Interactive Search (Crucial Step)
+
+Because interactive CLI tools require terminal keyboard input (`stdin`), you **must** use the interactive TTY flag (`-it`) when exec-ing into the running container:
+
+```bash
+docker compose exec -it rag python src/cli/search.py
+```
+
+> 💡 **Why `-it`?** Standard `docker compose up` only streams logs to the console and cannot receive keyboard typing. The `-it` flag attaches an **interactive pseudo-terminal** so you can type your queries directly into the search prompt.
+
+Inside the interactive search CLI, you can:
+- Type any query in Nepali (e.g., `कम्पनी दर्ता गर्ने तरिका`) or English.
+- Toggle search mode: `type hybrid`, `type dense`, or `type sparse`.
+- Change result count: `top 10`.
+- Toggle cross-encoder re-ranking: `rerank on` or `rerank off`.
+- Exit: `exit` or `quit`.
+
+---
+
+### 3. Pipeline Commands via Docker Exec
+
+You can run individual pipeline stages directly inside the running container:
 
 * **Extract PDFs to JSON:**
   ```bash
   docker compose exec rag python src/cli/pdf_extractor.py
   ```
-* **Embed and Ingest Data:**
+  *(Reads PDFs from `./input_pdfs/` and outputs structured datasets to `./output_jsons/`)*
+
+* **Embed & Ingest Datasets into Qdrant:**
   ```bash
   docker compose exec rag python src/cli/ingest.py
-  # Or to recreate collection:
+  ```
+  *(To wipe the database and start fresh, add `--recreate`)*:
+  ```bash
   docker compose exec rag python src/cli/ingest.py --recreate
   ```
-* **Search the Database (Interactive REPL):**
+
+* **One-Shot Search (Skip interactive mode):**
   ```bash
-  docker compose exec rag python src/cli/search.py
-  # Or to skip the cross-encoder reranker:
-  docker compose exec rag python src/cli/search.py --no-rerank
+  docker compose exec rag python src/cli/search.py -q "कम्पनी दर्ता"
+  ```
+  *(To disable cross-encoder re-ranking for faster execution, add `--no-rerank`)*:
+  ```bash
+  docker compose exec rag python src/cli/search.py -q "कम्पनी दर्ता" --no-rerank
   ```
 
-## Project Directory Structure
+---
+
+### 4. Automated Execution & Environment Variables
+
+You can configure automatic pipeline execution on container startup by editing your `.env` file or passing environment variables:
+
+| Variable | Default | Description |
+| :--- | :--- | :--- |
+| `QDRANT_URL` | `http://qdrant:6333` | Qdrant service URL |
+| `RUN_EXTRACT` | `false` | Automatically extract PDFs in `input_pdfs/` on startup |
+| `RUN_INGEST` | `false` | Automatically embed & ingest `output_jsons/` on startup |
+| `RECREATE_COLLECTION` | `false` | Drop and recreate Qdrant collection during ingestion |
+| `ENABLE_RERANK` | `false` | Toggle cross-encoder re-ranking (`true`/`false`) |
+
+#### Example: Automated Extract + Ingest on Startup
+In PowerShell:
+```cmd
+$env:RUN_EXTRACT="true"; $env:RUN_INGEST="true"; docker compose up
+```
+
+---
+
+## 💻 Local Installation Setup (Alternative)
+
+If you prefer running without Docker directly on your host machine:
+
+### Prerequisites
+1. **Python 3.10+** installed.
+2. **Tesseract OCR**:
+   - Download and install [Tesseract OCR for Windows](https://github.com/UB-Mannheim/tesseract/wiki).
+   - Install the **Nepali (`nep`) language pack** during setup.
+3. **Qdrant**:
+   - Run Qdrant locally: `docker run -p 6333:6333 qdrant/qdrant`
+
+### Steps
+1. Create and activate a virtual environment:
+   ```cmd
+   python -m venv .venv
+   .\.venv\Scripts\activate
+   ```
+
+2. Install dependencies using `uv` (recommended) or `pip`:
+   ```cmd
+   pip install -r requirements.txt
+   ```
+
+3. Create a `.env` file:
+   ```env
+   QDRANT_URL="http://localhost:6333"
+   MISTRAL_API_KEY="your_api_key_here"
+   ```
+
+4. Run scripts:
+   ```cmd
+   # Step 1: Extract PDFs
+   python src/cli/pdf_extractor.py
+
+   # Step 2: Ingest Datasets
+   python src/cli/ingest.py
+
+   # Step 3: Interactive Search
+   python src/cli/search.py
+   ```
+
+---
+
+## 📁 Project Directory Structure
 
 ```text
-Major project/
+Major-Project/
+│── Dockerfile                 # Fast Docker build (uv + Tesseract OCR + nep pack)
+│── compose.yaml               # Docker Compose service definition (qdrant + rag)
+│── entrypoint.sh              # Container startup orchestrator script
 │── requirements.txt           # Python dependencies
-│── README.md                  # This file
-│── .env                       # Environment configuration (e.g., Qdrant URL)
-│── input_pdfs/                # 📂 Place your raw Nepali PDFs here!
-│── output_jsons/              # 📂 Generated JSON datasets appear here
+│── .env                       # Environment configuration
+│── input_pdfs/                # 📂 Place raw Nepali PDF files here
+│── output_jsons/              # 📂 Extracted hierarchical JSON datasets
 └── src/
-    │── config.py              # Configuration and settings loader
-    │── pdf_extractor.py       # Main orchestration script for PDF extraction
-    │── ingest.py              # Script to embed JSONs and upsert to Qdrant
-    │── search.py              # Interactive CLI for testing RAG search
-    ├── pipeline/
+    ├── config.py              # Configuration loader
+    ├── cli/
+    │   ├── pdf_extractor.py   # CLI orchestrator for PDF extraction
+    │   ├── ingest.py          # CLI for embedding JSONs into Qdrant
+    │   └── search.py          # Interactive REPL & One-shot Search CLI
+    ├── extraction/
     │   ├── extractor.py       # PyMuPDF + Tesseract OCR hybrid logic
     │   ├── cleaner.py         # Regex-based text artifact cleaner
-    │   └── formatter.py       # Regex-based structural JSON parser
+    │   └── formatter.py       # Hierarchical JSON parser
     └── embedding/
-        ├── embedder.py        # Dense + Sparse BGE-M3 text embedder
-        └── vector_store.py    # Qdrant client wrapper (handles hybrid RRF)
+        ├── embedder.py        # Dense + Sparse BAAI/bge-m3 embedder
+        ├── vector_store.py    # Qdrant client wrapper (hybrid RRF search)
+        └── reranker.py        # BAAI/bge-reranker-v2-m3 Cross-Encoder
 ```
 
-## Usage Instructions
+---
 
-### 1. Extract PDFs to JSON
-1. Place one or more Nepali legal PDF files (e.g., `company_act.pdf`) into the `input_pdfs/` directory.
-2. Run the main extraction script:
-   ```cmd
-   python src/pdf_extractor.py
-   ```
-   *This extracts text using OCR, builds the document hierarchy (Chapters, Sections, etc.), and outputs to `output_jsons/`.*
+## 🔬 Architecture Highlights
 
-### 2. Embed and Ingest Data
-1. Ensure your Qdrant server is running and the URL matches your `.env` configuration.
-2. Run the ingestion script to embed the chunks into dense and sparse vectors, and upsert them to Qdrant:
-   ```cmd
-   python src/ingest.py
-   ```
-   *(To wipe the database and start fresh, run `python src/ingest.py --recreate`)*
-
-### 3. Search the Database
-Use the interactive REPL to test vector retrieval:
-```cmd
-python src/search.py
-```
-Inside the REPL, you can dynamically adjust search parameters:
-- `top <N>`: Change how many results are returned (e.g., `top 10`).
-- `type <dense|sparse|hybrid>`: Toggle the search algorithm. `hybrid` is the default and provides the highest accuracy by combining semantic meaning (dense) with exact keyword matching (sparse) via Reciprocal Rank Fusion.
-
-## Architecture Details
-
-- **Extraction**: Renders PDFs to 300 DPI images and leverages Tesseract's `psm 4` to ensure bulleted clauses like `(क)` remain attached to their definitions instead of splitting into distinct columns.
-- **Formatting**: Builds an exact hierarchical schema (Chapter → Section → Clause). Extracts `तर` (Provisos) and `स्पष्टीकरण` (Explanations) directly.
-- **Embedding Context**: Small clauses like `"कम्पनीको नाम,"` are embedded along with their full hierarchy titles and provisos in a single string, ensuring short texts have massive semantic meaning in the vector space.
-- **Multi-Vector Hybrid Search**: Uses `BGEM3FlagModel` to generate a 1024-dimensional semantic vector and a lexical token weight map simultaneously. Qdrant's `Prefetch` API merges both strategies natively.
+- **Preprocessed OCR**: Renders PDFs at 300 DPI, applies contrast enhancement, Otsu binarization, and median noise filtering for crisp Devanagari OCR recognition.
+- **Hierarchical Context Embedding**: Each chunk (clause/sub-section) is embedded alongside its full breadcrumb path (e.g., `title: कम्पनीको संस्थापना | दफा: संक्षिप्त नाम र प्रारम्भ | ...`), ensuring short legal sentences carry rich semantic context.
+- **Native Multi-Vector Hybrid Search**: Uses `BGEM3FlagModel` to generate 1024-dim dense vectors and lexical sparse weights simultaneously. Qdrant merges both streams via Reciprocal Rank Fusion (RRF).
+- **Two-Stage Re-ranking**: Option to pass top retrieval candidates through `BAAI/bge-reranker-v2-m3` cross-encoder for max precision.
