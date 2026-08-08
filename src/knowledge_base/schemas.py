@@ -7,7 +7,7 @@ Defines the structured output schemas for:
 - Task-level aggregated registration workflows
 """
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import List, Optional
 
 
@@ -28,6 +28,7 @@ class ClauseNEROutput(BaseModel):
     """
     Structured NER output from a single chunk/clause sent to Mistral.
     This is the JSON schema the Mistral API is prompted to return.
+    Includes validators to catch common LLM output errors.
     """
     office: Optional[str] = Field(default=None, description="Government office or authority name")
     documents_required: List[str] = Field(default_factory=list, description="List of required documents, certificates, or applications")
@@ -35,6 +36,30 @@ class ClauseNEROutput(BaseModel):
     price: Optional[str] = Field(default=None, description="Fee, fine, or monetary cost as text")
     duration_days: Optional[str] = Field(default=None, description="Time duration or deadline as text")
     prerequisites: Optional[str] = Field(default=None, description="Any eligibility criteria or prerequisites")
+
+    @field_validator('office', mode='before')
+    @classmethod
+    def normalize_office(cls, v):
+        """Handle LLM returning a dict instead of string for office."""
+        if isinstance(v, dict):
+            return v.get('name') or v.get('office') or None
+        return v
+
+    @field_validator('documents_required', mode='before')
+    @classmethod
+    def filter_invalid_documents(cls, v):
+        """Remove single-character entries and obvious non-documents."""
+        if not isinstance(v, list):
+            return []
+        return [item for item in v if isinstance(item, str) and len(item.strip()) > 2]
+
+    @field_validator('steps', mode='before')
+    @classmethod
+    def filter_fragment_steps(cls, v):
+        """Remove single-word fragments from steps list."""
+        if not isinstance(v, list):
+            return []
+        return [item for item in v if isinstance(item, str) and len(item.strip().split()) >= 2]
 
 
 class ExtractedEntity(BaseModel):
