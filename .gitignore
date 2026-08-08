@@ -1,6 +1,11 @@
 .venv
 __pycache__
 *.__pycache__
+.agents/*
+.ai/*
+.claude/*
+.gemini/*
+
 
 # Virtual environment
 .venv/
@@ -13,12 +18,14 @@ __pycache__
 
 #Ignore everything inside these folders
 input_pdfs/*
-output_jsons/*
+extracted_jsons/*
+ner_outputs/*
 
 # But don't ignore the .gitkeep files! 
 # (The '!' means "except")
 !input_pdfs/.gitkeep
-!output_jsons/.gitkeep
+!extracted_jsons/.gitkeep
+!ner_outputs/.gitkeep
 
 # Python cache
 __pycache__/
@@ -43,3 +50,4 @@ test_ocr_*.txt
 test_extractor.py
 scratch_output.txt
 REPORT_EMBEDDING.md
+implementation_plan.md

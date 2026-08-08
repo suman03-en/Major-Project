@@ -10,4 +10,19 @@ compose.yaml
 Dockerfile
 README.md
 
+#agents files
+.agents/
+.ai/
+.claude/
+.gemini/
+
+# temporary artifacts
+implementation_plan
+
+# Data directories — not needed in Docker build context (mounted as volumes)
+output_jsons/
+extracted_jsons/
+ner_outputs/
+input_pdfs/
+
 qdrant_storage/

@@ -14,13 +14,17 @@ services:
     tty: true
     volumes:
       - ./input_pdfs:/app/input_pdfs
-      - ./output_jsons:/app/output_jsons
+      - ./extracted_jsons:/app/extracted_jsons
+      - ./ner_outputs:/app/ner_outputs
       - ./datasets:/app/datasets
       - huggingface_cache:/root/.cache/huggingface
     env_file:
       - .env
     environment:
-      - RUN_INGEST=false
+      - RUN_EXTRACT=${RUN_EXTRACT:-false}
+      - RUN_INGEST=${RUN_INGEST:-false}
+      - RECREATE_COLLECTION=${RECREATE_COLLECTION:-false}
+      - ENABLE_RERANK=${ENABLE_RERANK:-false}
     depends_on:
       - qdrant
 
