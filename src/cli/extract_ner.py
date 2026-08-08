@@ -2,17 +2,20 @@
 CLI command for the NER extraction pipeline.
 
 Usage:
-    python -m src.cli.extract_ner --input <dataset_json> [--output <output_json>] [--filter-only] [--batch-size N] [--use-windowing]
+    python -m src.cli.extract_ner --input <dataset_json> [--provider auto|ollama|mistral] [--output <output_json>] [--filter-only] [--batch-size N] [--use-windowing]
 
 Examples:
-    # Run full NER pipeline on a dataset
+    # Run full NER pipeline (auto-selects local Ollama if available, else Mistral API)
     python -m src.cli.extract_ner --input extracted_jsons/industrail_business_act_2063_dataset.json
 
-    # Only show filter stats (no API calls)
+    # Force using local Ollama (e.g. Qwen 2.5 / Llama 3.2)
+    python -m src.cli.extract_ner --input extracted_jsons/industrail_business_act_2063_dataset.json --provider ollama --ollama-model qwen2.5
+
+    # Force using Mistral AI API
+    python -m src.cli.extract_ner --input extracted_jsons/industrail_business_act_2063_dataset.json --provider mistral
+
+    # Only show filter stats (no API/LLM calls)
     python -m src.cli.extract_ner --input extracted_jsons/industrail_business_act_2063_dataset.json --filter-only
-    
-    # Use context windowing for merged clause extraction
-    python -m src.cli.extract_ner --input extracted_jsons/industrail_business_act_2063_dataset.json --use-windowing
 """
 
 import os
@@ -92,7 +95,16 @@ def run_filter_only(data: dict) -> None:
     print()
 
 
-def run_pipeline(data: dict, output_path: str, use_windowing: bool = False, batch_size: int = 0) -> None:
+def run_pipeline(
+    data: dict,
+    output_path: str,
+    use_windowing: bool = False,
+    batch_size: int = 0,
+    provider: str = "auto",
+    ollama_host: str = None,
+    ollama_model: str = None,
+    mistral_model: str = "mistral-large-latest",
+) -> None:
     """Run the full NER extraction pipeline."""
     act_meta = data.get('act_metadata', {})
     act_title = act_meta.get('title', 'Unknown Act')
@@ -120,9 +132,17 @@ def run_pipeline(data: dict, output_path: str, use_windowing: bool = False, batc
     else:
         print("\n[2/4] Skipping context windowing (use --use-windowing to enable)")
 
-    # Step 3: NER extraction via Mistral
-    print(f"\n[3/4] Extracting entities via Mistral API ({len(processing_chunks)} calls)...")
-    extractor = NERExtractor()
+    # Step 3: NER extraction via chosen Provider (Ollama / Mistral)
+    extractor = NERExtractor(
+        provider=provider,
+        ollama_host=ollama_host,
+        ollama_model=ollama_model,
+        mistral_model=mistral_model,
+    )
+    active_prov = extractor.active_provider.upper()
+    model_name = extractor.ollama_model if extractor.active_provider == "ollama" else extractor.mistral_model
+
+    print(f"\n[3/4] Extracting entities via {active_prov} [{model_name}] ({len(processing_chunks)} calls)...")
     start_time = time.time()
 
     def progress(current, total):
@@ -134,7 +154,6 @@ def run_pipeline(data: dict, output_path: str, use_windowing: bool = False, batc
 
     entities = extractor.extract_batch(
         processing_chunks,
-        delay_between_calls=0.5,
         progress_callback=progress,
     )
     elapsed = time.time() - start_time
@@ -147,7 +166,6 @@ def run_pipeline(data: dict, output_path: str, use_windowing: bool = False, batc
     print(f"  → Generated {len(workflows)} task workflows")
 
     # Build pipeline result
-    # Derive act slug from title
     act_slug = act_meta.get('title', 'unknown').replace(' ', '_').replace(',', '')
     result = NERPipelineResult(
         act_title=act_title,
@@ -171,6 +189,7 @@ def run_pipeline(data: dict, output_path: str, use_windowing: bool = False, batc
     print("  EXTRACTION SUMMARY")
     print("=" * 60)
     print(f"  Act:                 {act_title}")
+    print(f"  Provider used:       {active_prov} [{model_name}]")
     print(f"  Chunks processed:    {len(processing_chunks)}")
     print(f"  Entities extracted:  {len(entities)}")
     print(f"  Workflows generated: {len(workflows)}")
@@ -200,9 +219,30 @@ def main():
         help="Path for the NER results JSON output. Default: ner_outputs/ner_results_<input_name>.json",
     )
     parser.add_argument(
+        "--provider", "-p",
+        choices=["auto", "ollama", "mistral"],
+        default="auto",
+        help="LLM provider choice. 'auto' uses local Ollama if running, else Mistral API. Default: auto",
+    )
+    parser.add_argument(
+        "--ollama-model",
+        default=None,
+        help="Ollama model name (e.g., qwen2.5, llama3.2). Default: qwen2.5",
+    )
+    parser.add_argument(
+        "--ollama-host",
+        default=None,
+        help="Ollama API host URL. Default: http://localhost:11434",
+    )
+    parser.add_argument(
+        "--mistral-model",
+        default="mistral-large-latest",
+        help="Mistral API model name. Default: mistral-large-latest",
+    )
+    parser.add_argument(
         "--filter-only",
         action="store_true",
-        help="Only run the pre-filter step and show statistics (no Mistral API calls)",
+        help="Only run the pre-filter step and show statistics (no LLM calls)",
     )
     parser.add_argument(
         "--use-windowing",
@@ -241,7 +281,16 @@ def main():
         data['chunks'] = data['chunks'][:args.batch_size]
         logger.info(f"Batch size limit: processing {len(data['chunks'])}/{original_count} chunks")
 
-    run_pipeline(data, output_path, use_windowing=args.use_windowing, batch_size=args.batch_size)
+    run_pipeline(
+        data,
+        output_path,
+        use_windowing=args.use_windowing,
+        batch_size=args.batch_size,
+        provider=args.provider,
+        ollama_host=args.ollama_host,
+        ollama_model=args.ollama_model,
+        mistral_model=args.mistral_model,
+    )
 
 
 if __name__ == "__main__":
