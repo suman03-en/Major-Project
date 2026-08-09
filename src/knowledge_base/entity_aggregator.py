@@ -2,25 +2,26 @@
 Entity Aggregator for the NER extraction pipeline.
 
 Groups clause-level NER extractions into coherent business
-registration task workflows. Handles:
-- Deduplication of documents and steps
-- Office grouping and normalization
-- Fee aggregation
-- Task-level workflow construction
+registration task workflows. Each workflow contains ordered steps
+with per-step office, documents, fees — ready for Neo4j ingestion.
+
+Handles:
+- Step deduplication by action text
+- Sequential step re-numbering
+- Task-level workflow construction from clause-level extractions
 """
 
 import re
-from typing import List, Dict, Optional
+from typing import List, Dict
 from collections import defaultdict
 
 from src.knowledge_base.schemas import (
     ExtractedEntity,
     RegistrationTaskWorkflow,
-    OfficeEntity,
-    PriceFee,
+    ProcessStep,
 )
 
-# Mapping section titles (or keywords in them) to high-level task names
+# Mapping patterns to high-level task names
 TASK_NAME_PATTERNS = [
     (r"दर्ता", "उद्योग दर्ता"),
     (r"नवीकरण", "उद्योग नवीकरण"),
@@ -34,13 +35,18 @@ TASK_NAME_PATTERNS = [
 
 def _infer_task_name(entity: ExtractedEntity) -> str:
     """
-    Infer a high-level task name from the entity's clause_ref breadcrumb
-    and any extracted step/document content.
+    Infer a high-level task name from the entity's process_name,
+    clause_ref, and step actions.
     """
-    # Combine the clause reference and extracted fields for keyword searching
+    # First, check process_name (most reliable — set by LLM)
+    if entity.process_name:
+        for pattern, task_name in TASK_NAME_PATTERNS:
+            if re.search(pattern, entity.process_name):
+                return task_name
+
+    # Then check clause_ref and step actions
     text_content = [entity.clause_ref]
-    text_content.extend(entity.steps)
-    text_content.extend(entity.documents_required)
+    text_content.extend(step.action for step in entity.steps)
     combined = " ".join(text_content)
 
     for pattern, task_name in TASK_NAME_PATTERNS:
@@ -50,56 +56,37 @@ def _infer_task_name(entity: ExtractedEntity) -> str:
     return "सामान्य प्रक्रिया"
 
 
-def _deduplicate_strings(items: List[str]) -> List[str]:
-    """Deduplicate a list of strings preserving order."""
-    seen = set()
-    result = []
-    for item in items:
-        normalized = item.strip()
-        if normalized and normalized not in seen:
-            seen.add(normalized)
-            result.append(normalized)
-    return result
+def _deduplicate_steps(steps: List[ProcessStep]) -> List[ProcessStep]:
+    """Deduplicate steps by action text, preserving order and re-numbering."""
+    seen_actions = set()
+    unique_steps = []
+    for step in steps:
+        normalized = step.action.strip()
+        if normalized and normalized not in seen_actions:
+            seen_actions.add(normalized)
+            unique_steps.append(step)
 
+    # Re-number sequentially
+    renumbered = []
+    for i, step in enumerate(unique_steps):
+        renumbered.append(step.model_copy(update={"step_number": i + 1}))
 
-def _deduplicate_fees(fees: List[PriceFee]) -> List[PriceFee]:
-    """Deduplicate fees by raw amount text."""
-    seen = set()
-    result = []
-    for fee in fees:
-        key = fee.amount_raw or ""
-        if key and key not in seen:
-            seen.add(key)
-            result.append(fee)
-        elif not key:
-            result.append(fee)
-    return result
-
-
-def _deduplicate_offices(offices: List[OfficeEntity]) -> List[OfficeEntity]:
-    """Deduplicate offices by name."""
-    seen = set()
-    result = []
-    for office in offices:
-        if office.name not in seen:
-            seen.add(office.name)
-            result.append(office)
-    return result
+    return renumbered
 
 
 class EntityAggregator:
     """
     Aggregates clause-level NER extractions into task-level
-    registration workflows.
+    registration workflows with ordered, per-step metadata.
     """
 
     def aggregate(self, entities: List[ExtractedEntity]) -> List[RegistrationTaskWorkflow]:
         """
         Group entities by inferred task name and build aggregated workflows.
-        
+
         Args:
             entities: List of clause-level extracted entities.
-        
+
         Returns:
             List of RegistrationTaskWorkflow objects.
         """
@@ -125,33 +112,22 @@ class EntityAggregator:
     ) -> RegistrationTaskWorkflow:
         """Build a single aggregated workflow from a group of related entities."""
 
-        all_offices = []
-        all_documents = []
         all_steps = []
-        all_fees = []
-        all_durations = []
-        all_prerequisites = []
         source_clauses = []
 
         for entity in entities:
             source_clauses.append(entity.chunk_id)
-
-            if entity.office:
-                all_offices.append(entity.office)
-
-            all_documents.extend(entity.documents_required)
             all_steps.extend(entity.steps)
-            all_fees.extend(entity.price_fees)
 
-            if entity.duration:
-                all_durations.append(entity.duration)
+        # Deduplicate steps and re-number sequentially
+        unique_steps = _deduplicate_steps(all_steps)
 
-            if entity.prerequisites:
-                all_prerequisites.append(entity.prerequisites)
-
-        # Build a description from the first entity's section title in clause_ref
+        # Build description from first entity with a process_name or section title
         description = None
         for entity in entities:
+            if entity.process_name:
+                description = entity.process_name
+                break
             sec_match = re.search(r'sec\d+\s*\((.*?)\)', entity.clause_ref)
             if sec_match:
                 description = sec_match.group(1)
@@ -160,11 +136,6 @@ class EntityAggregator:
         return RegistrationTaskWorkflow(
             task_name=task_name,
             description=description,
-            offices=_deduplicate_offices(all_offices),
-            all_documents=_deduplicate_strings(all_documents),
-            all_steps=_deduplicate_strings(all_steps),
-            all_fees=_deduplicate_fees(all_fees),
-            durations=_deduplicate_strings(all_durations),
-            prerequisites=_deduplicate_strings(all_prerequisites),
+            steps=unique_steps,
             source_clauses=source_clauses,
         )

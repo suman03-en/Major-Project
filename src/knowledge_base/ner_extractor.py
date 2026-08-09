@@ -28,7 +28,7 @@ from mistralai.client import Mistral
 import sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 from src.config import get_settings
-from src.knowledge_base.schemas import ClauseNEROutput, ExtractedEntity, PriceFee, OfficeEntity
+from src.knowledge_base.schemas import ClauseNEROutput, RawStepOutput, ExtractedEntity, ProcessStep, PriceFee, OfficeEntity
 
 logger = logging.getLogger(__name__)
 
@@ -100,74 +100,93 @@ def parse_office(raw_text: Optional[str]) -> Optional[OfficeEntity]:
     return OfficeEntity(name=raw_text.strip(), level=level)
 
 
-# --- System prompt for NER extraction ---
+# --- System prompt for NER extraction (step-centric for Neo4j graph DB) ---
 
 SYSTEM_PROMPT = """You are a Named Entity Recognition assistant specializing in Nepali legal and administrative text.
 
-Your task is to extract business registration entities from the provided Nepali text chunk.
+Your task is to extract STEP-BY-STEP procedural information from Nepali legal text about business registration.
+Each step must carry its OWN associated office, documents, fee, and duration.
+
+This data will be stored in a Neo4j graph database where users ask questions like:
+"How do I register a company?" and expect to receive:
+- Ordered steps
+- Which office to visit at each step
+- What documents to carry at each step
+- What fees to pay at each step
+- How long each step takes
 
 Return a JSON object with EXACTLY these fields:
 {
-  "office": "string or null",
-  "documents_required": ["string1", "string2"],
-  "steps": ["string1", "string2"],
-  "price": "string or null",
-  "duration_days": "string or null",
-  "prerequisites": "string or null"
+  "process_name": "string or null",
+  "steps": [
+    {
+      "step_number": 1,
+      "action": "complete action description in Nepali",
+      "office": "government office name or null",
+      "documents_required": ["doc1", "doc2"],
+      "fee": "fee amount text or null",
+      "duration": "time period or null",
+      "prerequisite": "condition or null"
+    }
+  ]
 }
 
 ═══════════════════════════════════════════
 FIELD DEFINITIONS AND RULES
 ═══════════════════════════════════════════
 
-1. "office" — The government office, department, ministry, or authority that performs the action.
-   ✅ VALID examples: "कम्पनी रजिष्ट्रारको कार्यालय", "उद्योग विभाग", "मन्त्रालय", "उद्योग दर्ता गर्ने निकाय"
-   ❌ INVALID — Do NOT extract these as office:
-     - Generic words like "बमोजिम", "बमोजिम कार्यालय", "निकायको सिफारिसमा"
-     - Sentence fragments that are not proper office names
-   → Must be a specific institutional name. If unsure, use null.
-   → Return as a plain string, NOT as an object/dictionary.
+1. "process_name" — The high-level name of the process or procedure described.
+   ✅ VALID: "उद्योग दर्ता", "उद्योग नवीकरण", "नामसारी", "उद्योग खारेज", "अनुमतिपत्र"
+   → If the text describes part of a known process, use the process name.
+   → If unclear, use null.
 
-2. "documents_required" — Specific named documents, certificates, forms, or applications that must be submitted.
-   ✅ VALID examples: "उद्योग दर्ता प्रमाणपत्र", "वातावरणीय प्रभाव मूल्याङ्कन प्रतिवेदन", "निवेदन", "अनुमति पत्र", "प्रतिलिपि"
-   ❌ INVALID — Do NOT extract these as documents:
-     - Legal cross-references: "उपदफा (१)", "उपदफा (४)", "दफा १३", "बमोजिम"
-     - Types of services/activities: "उद्योग दर्ता", "नवीकरण", "नामसारी", "नाम परिवर्तन", "स्थानान्तरण", "क्षमता वृद्धि", "पुँजी वृद्धि"
-     - Single characters or Nepali list markers: "क", "ख", "ग", "ढ", "ण", "त", "थ"
-     - Generic words: "बमोजिम", "मिति", "एक पटक", "सुझाव", "सिफारिस", "प्रतिशत"
-   → Each document name must be at least 3 words or a specific named form/certificate.
+2. "steps" — Array of procedural steps. Each step is a COMPLETE action with its metadata.
 
-3. "steps" — Complete, meaningful procedural actions or duties described in the text.
-   ✅ VALID examples: "उद्योग दर्ता गर्ने निकाय समक्ष निवेदन दिनुपर्छ", "उपदफा बमोजिम प्राप्त निवेदन जाँचबुझ गर्ने", "निवेदकलाई सोको जानकारी दिनुपर्नेछ"
-   ❌ INVALID — Do NOT extract these as steps:
-     - Individual words: "पेश", "सम्बन्धमा", "हुने", "निर्णय"
-     - Two-word fragments: "अनुगमन गरिए", "सिफारिस गरे"
-     - Incomplete phrases that do not describe a complete action
-   → Each step MUST be a complete sentence or phrase describing a specific action (minimum 5 words).
-   → If the text does not describe a sequential procedure, return [].
+   2a. "step_number" — Sequential integer starting from 1.
 
-4. "price" — ONLY official government fees with specific amounts.
-   ✅ VALID: "रु. १०,०००", "दस्तुर रु.५,०००", "पाँच हजार रुपैयाँ दस्तुर"
-   ❌ INVALID: Capital amounts, penalties/जरिवाना, percentages like "पैंतीस प्रतिशत"
-   → Must contain a specific monetary amount with रु./रुपैयाँ/शुल्क/दस्तुर.
+   2b. "action" — A complete, meaningful procedural action described in the text.
+       ✅ VALID: "उद्योग दर्ता गराउन चाहने व्यक्तिले तोकिएको विवरण सहित निकाय मार्फत्‌ बोर्ड समक्ष निवेदन दिनुपर्नेछ"
+       ❌ INVALID: Individual words like "पेश", fragments like "अनुगमन गरिए"
+       → Must be a complete sentence or phrase describing a specific action (minimum 5 words).
 
-5. "duration_days" — Time periods, deadlines, or validity periods.
-   ✅ VALID: "तीस दिनभित्र", "सात कार्य दिनभित्र", "एक वर्ष", "पाँच दिनभित्र", "३ महिनाभित्र"
-   ❌ INVALID: Words that are not time periods: "अद्यावधि", "तीन"
-   → Must contain a time unit word: दिन, दिनभित्र, महिना, वर्ष, कार्य दिन, etc.
+   2c. "office" — The government office where THIS SPECIFIC step is performed.
+       ✅ VALID: "कम्पनी रजिष्ट्रारको कार्यालय", "उद्योग विभाग", "उद्योग दर्ता गर्ने निकाय", "मन्त्रालय"
+       ❌ INVALID: Generic words like "बमोजिम", sentence fragments
+       → Must be a specific institutional name. If no office is mentioned for this step, use null.
+       → Return as a plain string, NOT as an object/dictionary.
 
-6. "prerequisites" — Eligibility criteria or conditions that must be met BEFORE the process.
-   → Must describe a specific condition, not a general statement.
+   2d. "documents_required" — Documents needed for THIS SPECIFIC step.
+       ✅ VALID: "उद्योग दर्ता प्रमाणपत्र", "निवेदन", "अनुमतिपत्र", "वातावरणीय प्रभाव मूल्याङ्कन प्रतिवेदन"
+       ❌ INVALID:
+         - Legal cross-references: "उपदफा (१)", "दफा १३", "बमोजिम"
+         - Service types: "उद्योग दर्ता", "नवीकरण", "नामसारी", "स्थानान्तरण"
+         - Single characters: "क", "ख", "ग"
+         - Generic words: "बमोजिम", "मिति", "सुझाव", "सिफारिस"
+       → Only include documents specifically required as INPUT to this step.
+
+   2e. "fee" — Government fee for THIS SPECIFIC step.
+       ✅ VALID: "रु. १०,०००", "दस्तुर रु.५,०००", "पाँच हजार रुपैयाँ दस्तुर"
+       ❌ INVALID: Capital amounts, penalties/जरिवाना, percentages
+       → Must contain a specific monetary amount with रु./रुपैयाँ/शुल्क/दस्तुर.
+
+   2f. "duration" — Time period or deadline for THIS SPECIFIC step.
+       ✅ VALID: "तीस दिनभित्र", "सात कार्य दिनभित्र", "एक वर्ष", "पाँच दिनभित्र"
+       ❌ INVALID: Words that are not time periods
+       → Must contain a time unit: दिन, दिनभित्र, महिना, वर्ष, कार्य दिन
+
+   2g. "prerequisite" — Condition that must be met BEFORE this step can be taken.
+       → Must describe a specific condition, not a general statement.
+       → Must be at least 10 characters.
 
 ═══════════════════════════════════════════
-WHEN TO RETURN ALL NULLS / EMPTY
+WHEN TO RETURN EMPTY STEPS
 ═══════════════════════════════════════════
 If the text is:
   - A definition section (परिभाषा)
   - A list of industry categories or types
-  - About board governance structure or meeting rules with no registration procedure
+  - About board governance or meeting rules with no registration procedure
   - A penalty/punishment section (सजाय/जरिवाना) with no registration process
-Then return: {"office": null, "documents_required": [], "steps": [], "price": null, "duration_days": null, "prerequisites": null}
+Then return: {"process_name": null, "steps": []}
 
 ═══════════════════════════════════════════
 EXAMPLES
@@ -176,34 +195,72 @@ EXAMPLES
 Example Input: "(१) अनुसूची-१ मा उल्लिखित उद्योग दर्ता गराउन चाहने व्यक्तिले तोकिएको विवरण सहित उद्योग दर्ता गर्ने निकाय मार्फत्‌ बोर्ड समक्ष निवेदन दिनुपर्नेछ।"
 Example Output:
 {
-  "office": "उद्योग दर्ता गर्ने निकाय",
-  "documents_required": ["तोकिएको विवरण सहित निवेदन"],
-  "steps": ["उद्योग दर्ता गराउन चाहने व्यक्तिले तोकिएको विवरण सहित उद्योग दर्ता गर्ने निकाय मार्फत्‌ बोर्ड समक्ष निवेदन दिनुपर्नेछ"],
-  "price": null,
-  "duration_days": null,
-  "prerequisites": null
+  "process_name": "उद्योग दर्ता",
+  "steps": [
+    {
+      "step_number": 1,
+      "action": "अनुसूची-१ मा उल्लिखित उद्योग दर्ता गराउन चाहने व्यक्तिले तोकिएको विवरण सहित उद्योग दर्ता गर्ने निकाय मार्फत्‌ बोर्ड समक्ष निवेदन दिनुपर्नेछ",
+      "office": "उद्योग दर्ता गर्ने निकाय",
+      "documents_required": ["तोकिएको विवरण सहित निवेदन"],
+      "fee": null,
+      "duration": null,
+      "prerequisite": null
+    }
+  ]
 }
 
 Example Input: "बोर्डको बैठकमा पेश हुने कार्यसूचीको सम्बन्धमा बोर्डको कुनै सदस्यको निजी सरोकार वा स्वार्थ रहेको भएमा त्यस्तो सदस्यले त्यस्तो कार्यसूचीका सम्बन्धमा हुने निर्णय प्रक्रियामा भाग लिन पाउने छैन।"
 Example Output:
 {
-  "office": null,
-  "documents_required": [],
-  "steps": [],
-  "price": null,
-  "duration_days": null,
-  "prerequisites": null
+  "process_name": null,
+  "steps": []
+}
+
+Example Input: "(३) उपदफा (१) बमोजिम प्राप्त निवेदन जाँचबुझ गर्दा आवश्यक विवरण तथा कागजात पूरा भएको देखिएमा त्यस्तो विवरण वा कागजात प्राप्त भएको पाँच दिनभित्र उद्योग दर्ता गर्ने निकायले उद्योग दर्ता गरी तोकिएको ढाँचामा उद्योग दर्ताको प्रमाणपत्र दिनु पर्नेछ।"
+Example Output:
+{
+  "process_name": "उद्योग दर्ता",
+  "steps": [
+    {
+      "step_number": 1,
+      "action": "उपदफा (१) बमोजिम प्राप्त निवेदन जाँचबुझ गर्दा आवश्यक विवरण तथा कागजात पूरा भएको देखिएमा उद्योग दर्ता गर्ने निकायले उद्योग दर्ता गरी तोकिएको ढाँचामा उद्योग दर्ताको प्रमाणपत्र दिनु पर्नेछ",
+      "office": "उद्योग दर्ता गर्ने निकाय",
+      "documents_required": ["आवश्यक विवरण तथा कागजात"],
+      "fee": null,
+      "duration": "पाँच दिनभित्र",
+      "prerequisite": "आवश्यक विवरण तथा कागजात पूरा भएको"
+    }
+  ]
+}
+
+Example Input: "(२) दफा ३ बमोजिम उद्योग दर्ताको लागि तोकिएको दस्तुर रु. ५,००० बुझाउनु पर्नेछ।"
+Example Output:
+{
+  "process_name": "उद्योग दर्ता",
+  "steps": [
+    {
+      "step_number": 1,
+      "action": "दफा ३ बमोजिम उद्योग दर्ताको लागि तोकिएको दस्तुर बुझाउनु पर्नेछ",
+      "office": null,
+      "documents_required": [],
+      "fee": "दस्तुर रु. ५,०००",
+      "duration": null,
+      "prerequisite": null
+    }
+  ]
 }
 
 ═══════════════════════════════════════════
 FINAL RULES
 ═══════════════════════════════════════════
 - Extract entities ONLY from the given text. Do not infer or hallucinate.
-- If no entity of a type is found, use null for strings and [] for arrays.
+- If the text describes multiple sequential actions, create multiple steps.
+- If the text describes a single action, create one step.
+- Each step's office, documents, fee, and duration must be SPECIFIC to that step.
+- Do NOT duplicate the same information across all steps — only assign metadata to the step it belongs to.
 - Keep extracted text in original Nepali language.
-- For steps, preserve the logical order as they appear in the text.
 - Output ONLY the JSON object. No markdown, no explanation.
-- QUALITY CHECK: Before returning, verify each extracted item meets the validity rules above."""
+- QUALITY CHECK: Before returning, verify each step has a meaningful action (5+ words)."""
 
 
 def build_clause_ref(chunk: dict) -> str:
@@ -408,7 +465,7 @@ class NERExtractor:
         """
         Parse and validate JSON response into a ClauseNEROutput.
         Handles markdown backticks, minor JSON syntax errors, and
-        normalizes office field from dict to string.
+        normalizes step-level office fields from dict to string.
         """
         if not content:
             return None
@@ -428,10 +485,15 @@ class NERExtractor:
         try:
             data = json.loads(content)
 
-            # Normalize office field: dict → string
-            if isinstance(data.get("office"), dict):
-                office_dict = data["office"]
-                data["office"] = office_dict.get("name") or office_dict.get("office") or None
+            # Ensure steps is a list
+            if not isinstance(data.get("steps"), list):
+                data["steps"] = []
+
+            # Normalize each step's office field: dict → string
+            for step in data.get("steps", []):
+                if isinstance(step, dict) and isinstance(step.get("office"), dict):
+                    office_dict = step["office"]
+                    step["office"] = office_dict.get("name") or office_dict.get("office") or None
 
             return ClauseNEROutput(**data)
         except (json.JSONDecodeError, ValidationError) as e:
@@ -440,14 +502,53 @@ class NERExtractor:
 
     def _validate_and_clean(self, ner_output: ClauseNEROutput) -> ClauseNEROutput:
         """
-        Post-processing validation layer that cleans LLM output to fix common
-        extraction errors: word fragmentation, category confusion, garbage text.
+        Post-processing validation layer that cleans step-centric LLM output.
+        Iterates over each step and cleans its fields individually.
         """
+        # --- Clean process_name ---
+        clean_process = ner_output.process_name
+        if clean_process:
+            clean_process = clean_process.strip()
+            if len(clean_process) < 3:
+                clean_process = None
+
+        # --- Clean each step ---
+        clean_steps = []
+        for step in ner_output.steps:
+            cleaned = self._clean_step(step)
+            if cleaned is not None:
+                clean_steps.append(cleaned)
+
+        # Re-number steps sequentially after cleaning
+        for i, step in enumerate(clean_steps):
+            clean_steps[i] = RawStepOutput(
+                step_number=i + 1,
+                action=step.action,
+                office=step.office,
+                documents_required=step.documents_required,
+                fee=step.fee,
+                duration=step.duration,
+                prerequisite=step.prerequisite,
+            )
+
+        return ClauseNEROutput(
+            process_name=clean_process,
+            steps=clean_steps,
+        )
+
+    def _clean_step(self, step: RawStepOutput) -> Optional[RawStepOutput]:
+        """Clean a single step's fields. Returns None if step should be discarded."""
+        action = step.action.strip() if step.action else ""
+
+        # Reject steps with too-short actions (fragments)
+        word_count = len(action.split())
+        if word_count < 4:
+            return None
+
         # --- Clean office ---
-        clean_office = ner_output.office
+        clean_office = step.office
         if clean_office:
             clean_office = clean_office.strip()
-            # Reject generic non-office strings
             invalid_office_patterns = [
                 r'^बमोजिम$',
                 r'^बमोजिम\s',
@@ -458,98 +559,79 @@ class NERExtractor:
                 if re.search(pattern, clean_office):
                     clean_office = None
                     break
-            # Reject very short "office" names (< 3 chars)
             if clean_office and len(clean_office) < 3:
                 clean_office = None
 
-        # --- Clean documents_required ---
-        # Patterns that indicate legal cross-references, not actual documents
+        # --- Clean documents ---
         doc_reject_patterns = [
-            r'^उपदफा\s*\(.*\)$',          # "उपदफा (१)" etc.
-            r'^दफा\s*[०-९\d]+',             # "दफा १३" etc.
-            r'^बमोजिम$',                    # standalone "बमोजिम"
-            r'^मिति$',                       # standalone "मिति"
-            r'^एक पटक$',                    # "एक पटक"
-            r'^प्रतिशत$',                   # "प्रतिशत"
-            r'^सुझाव$',                      # "सुझाव"
-            r'^सिफारिस$',                   # "सिफारिस"
-            r'^दस्तुर$',                     # bare "दस्तुर" without amount
-            r'^जानकारी$',                    # bare "जानकारी"
-            r'^अभिलेख$',                    # bare "अभिलेख"
-            r'^कागजात$',                    # bare "कागजात"
+            r'^उपदफा\s*\(.*\)$',
+            r'^दफा\s*[०-९\d]+',
+            r'^बमोजिम$',
+            r'^मिति$',
+            r'^एक पटक$',
+            r'^प्रतिशत$',
+            r'^सुझाव$',
+            r'^सिफारिस$',
+            r'^दस्तुर$',
+            r'^जानकारी$',
+            r'^अभिलेख$',
+            r'^कागजात$',
         ]
-        # Service type names that are NOT documents
         service_type_keywords = {
             'उद्योग दर्ता', 'नवीकरण', 'नामसारी', 'नाम परिवर्तन',
             'स्थानान्तरण', 'क्षमता वृद्धि', 'पुँजी वृद्धि',
         }
         clean_docs = []
-        for doc in ner_output.documents_required:
+        for doc in step.documents_required:
             doc = doc.strip()
-            # Skip empty or single-character entries (Nepali list markers)
             if len(doc) <= 2:
                 continue
-            # Skip legal cross-reference patterns
             if any(re.match(p, doc) for p in doc_reject_patterns):
                 continue
-            # Skip service type names
             if doc in service_type_keywords:
                 continue
             clean_docs.append(doc)
 
-        # --- Clean steps ---
-        clean_steps = []
-        for step in ner_output.steps:
-            step = step.strip()
-            # Count words (Nepali words separated by spaces)
-            word_count = len(step.split())
-            # Reject steps with fewer than 4 words (fragments/individual words)
-            if word_count < 4:
-                continue
-            clean_steps.append(step)
+        # --- Clean fee ---
+        clean_fee = step.fee
+        if clean_fee:
+            clean_fee = clean_fee.strip()
+            fee_indicators = ['रु', 'रुपैयाँ', 'शुल्क', 'दस्तुर', 'हजार']
+            has_fee_word = any(kw in clean_fee for kw in fee_indicators)
+            if not has_fee_word:
+                clean_fee = None
+            penalty_indicators = ['जरिवाना', 'जरिबाना', 'सजाय']
+            if clean_fee and any(kw in clean_fee for kw in penalty_indicators):
+                clean_fee = None
 
         # --- Clean duration ---
-        clean_duration = ner_output.duration_days
+        clean_duration = step.duration
         if clean_duration:
             clean_duration = clean_duration.strip()
-            # Must contain a time-related word
             time_keywords = ['दिन', 'महिना', 'वर्ष', 'कार्य दिन', 'भित्र', 'सम्म']
             has_time_word = any(kw in clean_duration for kw in time_keywords)
             if not has_time_word:
                 clean_duration = None
 
-        # --- Clean price ---
-        clean_price = ner_output.price
-        if clean_price:
-            clean_price = clean_price.strip()
-            # Must contain fee-related indicators
-            fee_indicators = ['रु', 'रुपैयाँ', 'शुल्क', 'दस्तुर', 'हजार']
-            has_fee_word = any(kw in clean_price for kw in fee_indicators)
-            if not has_fee_word:
-                clean_price = None
-            # Reject penalty amounts
-            penalty_indicators = ['जरिवाना', 'जरिबाना', 'सजाय']
-            if clean_price and any(kw in clean_price for kw in penalty_indicators):
-                clean_price = None
+        # --- Clean prerequisite ---
+        clean_prereq = step.prerequisite
+        if clean_prereq:
+            clean_prereq = clean_prereq.strip()
+            if len(clean_prereq) < 10:
+                clean_prereq = None
 
-        # --- Clean prerequisites ---
-        clean_prereqs = ner_output.prerequisites
-        if clean_prereqs:
-            clean_prereqs = clean_prereqs.strip()
-            if len(clean_prereqs) < 10:
-                clean_prereqs = None
-
-        return ClauseNEROutput(
+        return RawStepOutput(
+            step_number=step.step_number,
+            action=action,
             office=clean_office,
             documents_required=clean_docs,
-            steps=clean_steps,
-            price=clean_price,
-            duration_days=clean_duration,
-            prerequisites=clean_prereqs,
+            fee=clean_fee,
+            duration=clean_duration,
+            prerequisite=clean_prereq,
         )
 
     def extract_from_chunk(self, chunk: dict) -> Optional[ExtractedEntity]:
-        """Extract NER entities from a single dataset chunk."""
+        """Extract step-centric NER entities from a single dataset chunk."""
         text = chunk.get("text", "")
         if not text.strip():
             return None
@@ -567,26 +649,28 @@ class NERExtractor:
         # Apply post-processing validation and cleaning
         ner_output = self._validate_and_clean(ner_output)
 
-        has_entities = (
-            ner_output.office
-            or ner_output.documents_required
-            or ner_output.steps
-            or ner_output.price
-            or ner_output.duration_days
-            or ner_output.prerequisites
-        )
-        if not has_entities:
+        # Discard if no steps survived cleaning
+        if not ner_output.steps:
             return None
+
+        # Convert RawStepOutput → ProcessStep (with structured office & fees)
+        process_steps = []
+        for raw_step in ner_output.steps:
+            process_steps.append(ProcessStep(
+                step_number=raw_step.step_number,
+                action=raw_step.action,
+                office=parse_office(raw_step.office),
+                documents_required=raw_step.documents_required,
+                price_fees=parse_price_fee(raw_step.fee),
+                duration=raw_step.duration,
+                prerequisite=raw_step.prerequisite,
+            ))
 
         return ExtractedEntity(
             chunk_id=chunk.get("id", "unknown"),
             clause_ref=build_clause_ref(chunk),
-            office=parse_office(ner_output.office),
-            documents_required=ner_output.documents_required,
-            steps=ner_output.steps,
-            price_fees=parse_price_fee(ner_output.price),
-            duration=ner_output.duration_days,
-            prerequisites=ner_output.prerequisites,
+            process_name=ner_output.process_name,
+            steps=process_steps,
         )
 
     def extract_batch(
