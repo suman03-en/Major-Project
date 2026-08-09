@@ -150,33 +150,42 @@ FIELD DEFINITIONS AND RULES
        → Must be a complete sentence or phrase describing a specific action (minimum 5 words).
 
    2c. "office" — The government office where THIS SPECIFIC step is performed.
-       ✅ VALID: "कम्पनी रजिष्ट्रारको कार्यालय", "उद्योग विभाग", "उद्योग दर्ता गर्ने निकाय", "मन्त्रालय"
-       ❌ INVALID: Generic words like "बमोजिम", sentence fragments
-       → Must be a specific institutional name. If no office is mentioned for this step, use null.
+       ✅ VALID: "कम्पनी रजिष्ट्रारको कार्यालय", "उद्योग विभाग", "उद्योग दर्ता गर्ने निकाय", "मन्त्रालय", "बोर्ड", "विभाग"
+       ❌ INVALID:
+         - Generic words: "बमोजिम", sentence fragments
+         - Descriptions of people/roles: "अनुमति प्राप्त गर्ने आवेदक", "निवेदक"
+       → Must be a specific institutional name (office/department/ministry/board/authority).
+       → If no office is mentioned for this step, use null.
        → Return as a plain string, NOT as an object/dictionary.
 
-   2d. "documents_required" — Documents needed for THIS SPECIFIC step.
-       ✅ VALID: "उद्योग दर्ता प्रमाणपत्र", "निवेदन", "अनुमतिपत्र", "वातावरणीय प्रभाव मूल्याङ्कन प्रतिवेदन"
-       ❌ INVALID:
-         - Legal cross-references: "उपदफा (१)", "दफा १३", "बमोजिम"
-         - Service types: "उद्योग दर्ता", "नवीकरण", "नामसारी", "स्थानान्तरण"
-         - Single characters: "क", "ख", "ग"
-         - Generic words: "बमोजिम", "मिति", "सुझाव", "सिफारिस"
-       → Only include documents specifically required as INPUT to this step.
+   2d. "documents_required" — ONLY specific named documents, certificates, forms, or applications needed for this step.
+       ✅ VALID: "उद्योग दर्ता प्रमाणपत्र", "वातावरणीय प्रभाव मूल्याङ्कन प्रतिवेदन", "तोकिएको ढाँचामा निवेदन", "नागरिकताको प्रतिलिपि"
+       ❌ INVALID — Do NOT extract ANY of these as documents:
+         - Single words: "अनुमति", "आवश्यकता", "कारण", "कारोबार", "जग्गा", "निवेदन" (alone)
+         - Legal cross-references: "उपदफा (१)", "दफा १३", "प्रचलित कानून", "खण्ड (ख)"
+         - Sentence fragments: "उपदफा (१) मा जुनसुकै कुरा लेखिएको", "अन्य कुराका अतिरिकत देहायका विवरण"
+         - Service/activity types: "उद्योग दर्ता", "नवीकरण", "नामसारी", "उद्योग सञ्चालन", "व्यावसायिक उत्पादन", "कारोबार"
+         - Generic nouns: "आवश्यक जाँचबुझ", "आवश्यकता", "सिफारिस", "प्रचलित कानून"
+       → A valid document must be something you can PHYSICALLY carry or submit (certificate, form, application, report).
+       → If no specific document name is mentioned, return [].
 
    2e. "fee" — Government fee for THIS SPECIFIC step.
        ✅ VALID: "रु. १०,०००", "दस्तुर रु.५,०००", "पाँच हजार रुपैयाँ दस्तुर"
        ❌ INVALID: Capital amounts, penalties/जरिवाना, percentages
        → Must contain a specific monetary amount with रु./रुपैयाँ/शुल्क/दस्तुर.
 
-   2f. "duration" — Time period or deadline for THIS SPECIFIC step.
-       ✅ VALID: "तीस दिनभित्र", "सात कार्य दिनभित्र", "एक वर्ष", "पाँच दिनभित्र"
-       ❌ INVALID: Words that are not time periods
-       → Must contain a time unit: दिन, दिनभित्र, महिना, वर्ष, कार्य दिन
+   2f. "duration" — An ACTUAL time period or deadline for THIS SPECIFIC step.
+       ✅ VALID: "तीस दिनभित्र", "सात कार्य दिनभित्र", "एक वर्ष", "पाँच दिनभित्र", "नब्बे दिन"
+       ❌ INVALID:
+         - Legal references to deadlines: "उपदफा (३) बमोजिमको म्यादभित्र" — this is a REFERENCE, not a time period
+         - Words without time units: "अद्यावधि", "तीन"
+       → Must be a CONCRETE time value with a unit: दिन, दिनभित्र, महिना, वर्ष, कार्य दिन
+       → Do NOT extract legal cross-references to deadlines (containing बमोजिम/उपदफा/दफा)
 
    2g. "prerequisite" — Condition that must be met BEFORE this step can be taken.
        → Must describe a specific condition, not a general statement.
        → Must be at least 10 characters.
+       → Do NOT use legal references like "उपदफा (१) बमोजिम" as prerequisites.
 
 ═══════════════════════════════════════════
 WHEN TO RETURN EMPTY STEPS
@@ -564,9 +573,10 @@ class NERExtractor:
 
         # --- Clean documents ---
         doc_reject_patterns = [
-            r'^उपदफा\s*\(.*\)$',
-            r'^दफा\s*[०-९\d]+',
-            r'^बमोजिम$',
+            r'^उपदफा\s*\(.*\)',          # legal refs: "उपदफा (१)", "उपदफा (१) मा..."
+            r'^दफा\s*[०-९\d]+',           # "दफा १३"
+            r'^खण्ड\s*\(',                 # "खण्ड (ख) मा..."
+            r'^बमोजिम',                    # "बमोजिम" or "बमोजिमको"
             r'^मिति$',
             r'^एक पटक$',
             r'^प्रतिशत$',
@@ -576,7 +586,16 @@ class NERExtractor:
             r'^जानकारी$',
             r'^अभिलेख$',
             r'^कागजात$',
+            r'^अन्य कुरा',                 # "अन्य कुराका अतिरिकत..."
+            r'लेखिएको$',                   # sentence fragments ending in "लेखिएको"
         ]
+        # Single-word generic nouns that are NOT documents
+        single_word_rejects = {
+            'अनुमति', 'आवश्यकता', 'कारण', 'कारोबार', 'जग्गा',
+            'निवेदन', 'प्रचलित कानून', 'अनुमतिपत्र', 'आवश्यक जाँचबुझ',
+            'उद्योग सञ्चालन', 'व्यावसायिक उत्पादन', 'आवश्यकता अनुसार',
+        }
+        # Service/activity type names that are NOT documents
         service_type_keywords = {
             'उद्योग दर्ता', 'नवीकरण', 'नामसारी', 'नाम परिवर्तन',
             'स्थानान्तरण', 'क्षमता वृद्धि', 'पुँजी वृद्धि',
@@ -586,9 +605,12 @@ class NERExtractor:
             doc = doc.strip()
             if len(doc) <= 2:
                 continue
+            # Reject single-word docs (too generic to be a real document name)
+            if len(doc.split()) == 1:
+                continue
             if any(re.match(p, doc) for p in doc_reject_patterns):
                 continue
-            if doc in service_type_keywords:
+            if doc in service_type_keywords or doc in single_word_rejects:
                 continue
             clean_docs.append(doc)
 
@@ -608,10 +630,16 @@ class NERExtractor:
         clean_duration = step.duration
         if clean_duration:
             clean_duration = clean_duration.strip()
+            # Must have a concrete time unit
             time_keywords = ['दिन', 'महिना', 'वर्ष', 'कार्य दिन', 'भित्र', 'सम्म']
             has_time_word = any(kw in clean_duration for kw in time_keywords)
             if not has_time_word:
                 clean_duration = None
+            # Reject legal cross-references to deadlines (not actual time values)
+            if clean_duration:
+                legal_ref_patterns = ['बमोजिम', 'उपदफा', 'दफा', 'खण्ड']
+                if any(ref in clean_duration for ref in legal_ref_patterns):
+                    clean_duration = None
 
         # --- Clean prerequisite ---
         clean_prereq = step.prerequisite
