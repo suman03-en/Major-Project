@@ -195,11 +195,15 @@ def run_pipeline(
     print(f"  Workflows generated: {len(workflows)}")
     for wf in workflows:
         print(f"\n    ► {wf.task_name}")
-        print(f"      Offices:    {len(wf.offices)}")
-        print(f"      Documents:  {len(wf.all_documents)}")
-        print(f"      Steps:      {len(wf.all_steps)}")
-        print(f"      Fees:       {len(wf.all_fees)}")
-        print(f"      Durations:  {len(wf.durations)}")
+        print(f"      Steps:      {len(wf.steps)}")
+        offices = set(s.office.name for s in wf.steps if s.office)
+        documents = set(d for s in wf.steps for d in s.documents_required)
+        fees = [f for s in wf.steps for f in s.price_fees]
+        durations = [s.duration for s in wf.steps if s.duration]
+        print(f"      Offices:    {len(offices)}")
+        print(f"      Documents:  {len(documents)}")
+        print(f"      Fees:       {len(fees)}")
+        print(f"      Durations:  {len(durations)}")
         print(f"      Clauses:    {len(wf.source_clauses)}")
     print("=" * 60 + "\n")
 

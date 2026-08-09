@@ -49,5 +49,7 @@ test_ocr_*.py
 test_ocr_*.txt
 test_extractor.py
 scratch_output.txt
+implementation_plan.md
+
 # Test directory
-tests/
+tests/
