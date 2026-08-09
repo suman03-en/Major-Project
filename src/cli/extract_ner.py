@@ -30,7 +30,6 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')
 
 from src.knowledge_base.ner_filter import ClauseFilter
 from src.knowledge_base.ner_extractor import NERExtractor
-from src.knowledge_base.entity_aggregator import EntityAggregator
 from src.knowledge_base.schemas import NERPipelineResult
 from src.config import get_settings
 
@@ -105,7 +104,7 @@ def run_pipeline(
     ollama_model: str = None,
     mistral_model: str = "mistral-large-latest",
 ) -> None:
-    """Run the full NER extraction pipeline."""
+    """Run the full NER extraction pipeline (filter → extract → save)."""
     act_meta = data.get('act_metadata', {})
     act_title = act_meta.get('title', 'Unknown Act')
     chunks = data['chunks']
@@ -117,7 +116,7 @@ def run_pipeline(
     print("=" * 60)
 
     # Step 1: Filter
-    print("\n[1/4] Filtering chunks...")
+    print("\n[1/3] Filtering chunks...")
     clause_filter = ClauseFilter()
     filtered_chunks = clause_filter.filter_chunks(chunks)
     stats = clause_filter.get_stats(chunks)
@@ -126,11 +125,11 @@ def run_pipeline(
     # Step 2: Context windowing (optional)
     processing_chunks = filtered_chunks
     if use_windowing:
-        print("\n[2/4] Applying context windowing...")
+        print("\n[2/3] Applying context windowing...")
         processing_chunks = NERExtractor.build_context_window(filtered_chunks, window_size=3)
         print(f"  → {len(processing_chunks)} chunks after windowing (from {len(filtered_chunks)})")
     else:
-        print("\n[2/4] Skipping context windowing (use --use-windowing to enable)")
+        print("\n[2/3] Skipping context windowing (use --use-windowing to enable)")
 
     # Step 3: NER extraction via chosen Provider (Ollama / Mistral)
     extractor = NERExtractor(
@@ -142,7 +141,7 @@ def run_pipeline(
     active_prov = extractor.active_provider.upper()
     model_name = extractor.ollama_model if extractor.active_provider == "ollama" else extractor.mistral_model
 
-    print(f"\n[3/4] Extracting entities via {active_prov} [{model_name}] ({len(processing_chunks)} calls)...")
+    print(f"\n[3/3] Extracting entities via {active_prov} [{model_name}] ({len(processing_chunks)} calls)...")
     start_time = time.time()
 
     def progress(current, total):
@@ -159,13 +158,7 @@ def run_pipeline(
     elapsed = time.time() - start_time
     print(f"\n  → Extracted {len(entities)} entities in {elapsed:.1f}s")
 
-    # Step 4: Aggregate into workflows
-    print(f"\n[4/4] Aggregating into task workflows...")
-    aggregator = EntityAggregator()
-    workflows = aggregator.aggregate(entities)
-    print(f"  → Generated {len(workflows)} task workflows")
-
-    # Build pipeline result
+    # Build pipeline result (no workflow aggregation — Neo4j handles grouping)
     act_slug = act_meta.get('title', 'unknown').replace(' ', '_').replace(',', '')
     result = NERPipelineResult(
         act_title=act_title,
@@ -173,7 +166,6 @@ def run_pipeline(
         total_chunks_processed=len(processing_chunks),
         total_chunks_filtered=len(filtered_chunks),
         entities=entities,
-        workflows=workflows,
     )
 
     # Save output
@@ -185,6 +177,12 @@ def run_pipeline(
     print(f"\n  ✓ Results saved to: {output_path}")
 
     # Summary
+    total_steps = sum(len(e.steps) for e in entities)
+    offices = set(s.office.name for e in entities for s in e.steps if s.office)
+    documents = set(d for e in entities for s in e.steps for d in s.documents_required)
+    fees = [f for e in entities for s in e.steps for f in s.price_fees]
+    processes = set(e.process_name for e in entities if e.process_name)
+
     print("\n" + "=" * 60)
     print("  EXTRACTION SUMMARY")
     print("=" * 60)
@@ -192,19 +190,11 @@ def run_pipeline(
     print(f"  Provider used:       {active_prov} [{model_name}]")
     print(f"  Chunks processed:    {len(processing_chunks)}")
     print(f"  Entities extracted:  {len(entities)}")
-    print(f"  Workflows generated: {len(workflows)}")
-    for wf in workflows:
-        print(f"\n    ► {wf.task_name}")
-        print(f"      Steps:      {len(wf.steps)}")
-        offices = set(s.office.name for s in wf.steps if s.office)
-        documents = set(d for s in wf.steps for d in s.documents_required)
-        fees = [f for s in wf.steps for f in s.price_fees]
-        durations = [s.duration for s in wf.steps if s.duration]
-        print(f"      Offices:    {len(offices)}")
-        print(f"      Documents:  {len(documents)}")
-        print(f"      Fees:       {len(fees)}")
-        print(f"      Durations:  {len(durations)}")
-        print(f"      Clauses:    {len(wf.source_clauses)}")
+    print(f"  Total steps:         {total_steps}")
+    print(f"  Unique offices:      {len(offices)}")
+    print(f"  Unique documents:    {len(documents)}")
+    print(f"  Fees found:          {len(fees)}")
+    print(f"  Processes detected:  {', '.join(processes) if processes else 'none'}")
     print("=" * 60 + "\n")
 
 
