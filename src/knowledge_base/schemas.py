@@ -121,20 +121,6 @@ class ExtractedEntity(BaseModel):
     steps: List[ProcessStep] = Field(default_factory=list, description="Ordered procedural steps with per-step metadata")
 
 
-class RegistrationTaskWorkflow(BaseModel):
-    """
-    Aggregated registration workflow grouping multiple clause-level
-    extractions into a single coherent business registration task.
-
-    Steps are ordered and carry per-step office, documents, fees —
-    enabling graph queries like "What documents do I need at step 3?"
-    """
-    task_name: str = Field(description="High-level task name, e.g., उद्योग दर्ता")
-    description: Optional[str] = None
-    steps: List[ProcessStep] = Field(default_factory=list, description="All procedural steps with per-step metadata, ordered")
-    source_clauses: List[str] = Field(default_factory=list, description="List of chunk_ids that contributed to this workflow")
-
-
 class NERPipelineResult(BaseModel):
     """Top-level output of the entire NER extraction pipeline for one act/document."""
     act_title: str
@@ -142,4 +128,3 @@ class NERPipelineResult(BaseModel):
     total_chunks_processed: int
     total_chunks_filtered: int
     entities: List[ExtractedEntity] = Field(default_factory=list)
-    workflows: List[RegistrationTaskWorkflow] = Field(default_factory=list)
