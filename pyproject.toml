@@ -1,0 +1,9 @@
+[project]
+name = "nepali-legal-rag"
+version = "0.1.0"
+description = "RAG pipeline for Nepali legal documents in the business domain"
+requires-python = ">=3.10"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*"]
