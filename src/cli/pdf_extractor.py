@@ -1,8 +1,4 @@
-import sys
 import os
-
-# Add project root to python path to allow running directly from src directory
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 
 import glob
 import json
@@ -17,7 +13,7 @@ def extract_metadata_from_text(front_matter_text):
     """
     Dynamically extract metadata from the first few pages of the act.
     """
-    from src.extraction.formatter import nepali_to_int
+    from src.utils import nepali_to_int
 
     metadata = {
         "title": "Unknown Act",
@@ -211,34 +207,26 @@ def main():
 
     for pdf_path in pdf_files:
         print(f"\nProcessing {pdf_path}...")
-        extractor = PdfExtractor(pdf_path)
 
-        # 1. Read first 2 pages for metadata
-        front_matter = []
-        for page_num in range(min(2, len(extractor.doc))):
-            page = extractor.doc.load_page(page_num)
-            raw_text = extractor._ocr_page(page)
-            front_matter.append(cleaner.clean(raw_text))
+        with PdfExtractor(pdf_path) as extractor:
+            # OCR all pages once (avoids double-processing pages 1-2)
+            all_cleaned_pages = []
+            for page_num, raw_text in extractor.extract_all_pages():
+                print(f"  OCR Page {page_num}/{len(extractor.doc)}...")
+                all_cleaned_pages.append(cleaner.clean(raw_text))
 
-        metadata = extract_metadata_from_text("\n".join(front_matter))
+        # Use first 2 pages for metadata extraction
+        front_matter = "\n".join(all_cleaned_pages[:2])
+        metadata = extract_metadata_from_text(front_matter)
         act_slug = slugify(pdf_path)
         print(
             f"Extracted Metadata successfully. Found {len(metadata['amended_refs'])} amendments."
         )
 
-        formatter = RegexFormatter(metadata, act_slug)
-
-        full_cleaned_text = []
-        # Process all pages
-        for page_num, raw_text in extractor.extract_all_pages():
-            print(f"  OCR Page {page_num}/{len(extractor.doc)}...")
-            cleaned_text = cleaner.clean(raw_text)
-            full_cleaned_text.append(cleaned_text)
-
-        extractor.close()
-
+        # Format all pages into structured JSON
         print("  Formatting text into JSON structure...")
-        combined_text = "\n".join(full_cleaned_text)
+        formatter = RegexFormatter(metadata, act_slug)
+        combined_text = "\n".join(all_cleaned_pages)
         dataset = formatter.process_text(combined_text)
 
         output_filename = f"{act_slug}_dataset.json"
