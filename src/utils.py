@@ -29,13 +29,11 @@ def nepali_to_int(text: str) -> Optional[int]:
     except ValueError:
         return None
 
-def get_ollama_installed_models(host: Optional[str] = None) -> list[str]:
+def get_ollama_installed_models(host: str) -> list[str]:
     """Retrieve list of installed model names from local Ollama server."""
     import urllib.request
     import json
-    from src.config import get_settings
     
-    host = host or get_settings().OLLAMA_HOST
     try:
         req = urllib.request.Request(f"{host}/api/tags", method="GET")
         with urllib.request.urlopen(req, timeout=1.5) as resp:
@@ -46,7 +44,7 @@ def get_ollama_installed_models(host: Optional[str] = None) -> list[str]:
         pass
     return []
 
-def is_ollama_available(host: Optional[str] = None) -> bool:
+def is_ollama_available(host: str) -> bool:
     """Check if local Ollama server is running and accessible."""
     return len(get_ollama_installed_models(host)) > 0
 
