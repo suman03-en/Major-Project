@@ -25,30 +25,13 @@ from typing import List, Optional, Tuple
 from pydantic import ValidationError
 from mistralai.client import Mistral
 
-import sys
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
+
 from src.config import get_settings
 from src.knowledge_base.schemas import ClauseNEROutput, RawStepOutput, ExtractedEntity, ProcessStep, PriceFee, OfficeEntity
 
 logger = logging.getLogger(__name__)
 
-# --- Nepali digit utilities ---
-
-NEPALI_DIGITS = '०१२३४५६७८९'
-ENGLISH_DIGITS = '0123456789'
-_TRANS_TABLE = str.maketrans(NEPALI_DIGITS, ENGLISH_DIGITS)
-
-
-def nepali_to_int(text: str) -> Optional[int]:
-    """Convert a Nepali numeral string to integer."""
-    clean = re.sub(r'[^\d०-९,]', '', text)
-    clean = clean.replace(',', '')
-    if not clean:
-        return None
-    try:
-        return int(clean.translate(_TRANS_TABLE))
-    except ValueError:
-        return None
+from src.utils import nepali_to_int
 
 
 def parse_price_fee(raw_text: Optional[str]) -> List[PriceFee]:
