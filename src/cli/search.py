@@ -16,9 +16,6 @@ Usage:
 import sys
 import os
 
-# Add project root to python path to allow running directly from src directory
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
-
 import logging
 import argparse
 from typing import Optional
@@ -29,16 +26,12 @@ from typing import Optional
 from src.embedding.embedder import LegalChunkEmbedder
 from src.embedding.vector_store import QdrantVectorStore
 from src.embedding.reranker import CrossEncoderReranker
-from src.config import get_settings
+from src.config import get_settings, setup_logging
 
 # ---------------------------------------------------------------------------
 # Logging (quiet by default for clean CLI output)
 # ---------------------------------------------------------------------------
-logging.basicConfig(
-    level=logging.WARNING,
-    format="%(asctime)s  %(levelname)-8s  %(name)s  %(message)s",
-    datefmt="%H:%M:%S",
-)
+setup_logging(level=logging.WARNING)
 logger = logging.getLogger("search")
 
 # ---------------------------------------------------------------------------

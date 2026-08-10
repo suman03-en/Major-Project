@@ -1,8 +1,16 @@
 import os
 from dataclasses import dataclass
+from functools import lru_cache
+import logging
 from dotenv import load_dotenv
 
 load_dotenv()
+
+def setup_logging(level: int = logging.INFO):
+    """Simple centralized logging configuration."""
+    fmt = "%(asctime)s | %(levelname)-7s | %(name)s | %(message)s"
+    logging.basicConfig(level=level, format=fmt, datefmt="%H:%M:%S")
+
 
 @dataclass(frozen=True)
 class Settings:
@@ -15,6 +23,7 @@ class Settings:
     EXTRACTED_JSONS_DIR: str  # Output of PDF extraction pipeline; input to embedding & NER
     NER_OUTPUTS_DIR: str      # Output of NER extraction pipeline
 
+@lru_cache(maxsize=1)
 def get_settings() -> Settings:
     """Generate settings from environment"""
     qdrant_url = os.getenv("QDRANT_URL")
