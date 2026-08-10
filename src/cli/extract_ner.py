@@ -25,19 +25,14 @@ import argparse
 import logging
 import time
 
-# Ensure project root is on the path
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 
 from src.knowledge_base.ner_filter import ClauseFilter
 from src.knowledge_base.ner_extractor import NERExtractor
 from src.knowledge_base.schemas import NERPipelineResult
-from src.config import get_settings
+from src.config import get_settings, setup_logging
 
 # Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-)
+setup_logging()
 logger = logging.getLogger(__name__)
 
 # Fix Windows console encoding for Nepali text output
