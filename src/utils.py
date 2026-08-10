@@ -28,3 +28,23 @@ def nepali_to_int(text: str) -> Optional[int]:
         return int(clean.translate(_TRANS_TABLE))
     except ValueError:
         return None
+
+def get_ollama_installed_models(host: str = "http://localhost:11434") -> list[str]:
+    """Retrieve list of installed model names from local Ollama server."""
+    import urllib.request
+    import json
+    
+    try:
+        req = urllib.request.Request(f"{host}/api/tags", method="GET")
+        with urllib.request.urlopen(req, timeout=1.5) as resp:
+            if resp.status == 200:
+                data = json.loads(resp.read().decode("utf-8"))
+                return [m.get("name", "") for m in data.get("models", [])]
+    except Exception:
+        pass
+    return []
+
+def is_ollama_available(host: str = "http://localhost:11434") -> bool:
+    """Check if local Ollama server is running and accessible."""
+    return len(get_ollama_installed_models(host)) > 0
+
