@@ -17,6 +17,7 @@ COPY requirements.txt .
 RUN uv pip install --system --no-cache-dir -r requirements.txt --index-strategy unsafe-best-match
 
 COPY . .
+RUN uv pip install --system --no-cache-dir -e .
 
 COPY entrypoint.sh /entrypoint.sh
 RUN sed -i 's/\r$//' /entrypoint.sh && chmod +x /entrypoint.sh

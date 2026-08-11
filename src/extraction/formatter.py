@@ -1,18 +1,7 @@
 import re
 import json
 
-NEPALI_DIGITS = '०१२३४५६७८९'
-ENGLISH_DIGITS = '0123456789'
-trans_table = str.maketrans(NEPALI_DIGITS, ENGLISH_DIGITS)
-
-def nepali_to_int(nepali_str):
-    try:
-        clean_str = re.sub(r'[^\d०-९]', '', nepali_str)
-        if not clean_str:
-            return None
-        return int(clean_str.translate(trans_table))
-    except ValueError:
-        return None
+from src.utils import nepali_to_int, NEPALI_DIGITS, ENGLISH_DIGITS
 
 def extract_references(text, slug_prefix):
     """
@@ -98,16 +87,21 @@ class RegexFormatter:
 
             provisos = []
             explanations = []
-            
-            if 'तर ' in text:
-                parts = text.split('तर ')
-                text = parts[0].strip()
-                provisos.append('तर ' + parts[1].strip())
-                
-            if 'स्पष्टीकरणः' in text:
-                parts = text.split('स्पष्टीकरणः')
-                text = parts[0].strip()
-                explanations.append('स्पष्टीकरणः ' + parts[1].strip())
+
+            # Split provisos (तर …) — handles multiple provisos in one clause
+            proviso_parts = re.split(r'(?<=।)\s*तर\s+', text)
+            if len(proviso_parts) > 1:
+                text = proviso_parts[0].strip()
+                for part in proviso_parts[1:]:
+                    provisos.append('तर ' + part.strip())
+
+            # Split explanations (स्पष्टीकरणः …) — same multi-capture approach
+            explanation_parts = re.split(r'स्पष्टीकरणः\s*', text)
+            if len(explanation_parts) > 1:
+                text = explanation_parts[0].strip()
+                for part in explanation_parts[1:]:
+                    if part.strip():
+                        explanations.append('स्पष्टीकरणः ' + part.strip())
 
             chunk_type = 'section'
             if self.current_sub is not None:
@@ -158,7 +152,7 @@ class RegexFormatter:
             
             chunk["stats"] = {
                 "characters": len(text),
-                "tokens": int(len(text.split()) * 1.5)
+                "tokens": max(1, len(text) // 3),  # Devanagari-aware estimate
             }
             self.chunks.append(chunk)
 

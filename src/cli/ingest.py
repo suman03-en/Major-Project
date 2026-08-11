@@ -12,9 +12,6 @@ Usage:
 import sys
 import os
 
-# Add project root to python path to allow running directly from src directory
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
-
 import glob
 import json
 import logging
@@ -26,24 +23,20 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 from src.embedding.embedder import LegalChunkEmbedder
 from src.embedding.vector_store import QdrantVectorStore
-from src.config import get_settings
+from src.config import get_settings, setup_logging
 
 # ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s  %(levelname)-8s  %(name)s  %(message)s",
-    datefmt="%H:%M:%S",
-)
+setup_logging()
 logger = logging.getLogger("ingest")
 
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
-PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
-EXTRACTED_JSONS_DIR = get_settings().EXTRACTED_JSONS_DIR
-QDRANT_URL = get_settings().QDRANT_URL
+_settings = get_settings()
+EXTRACTED_JSONS_DIR = _settings.EXTRACTED_JSONS_DIR
+QDRANT_URL = _settings.QDRANT_URL
 
 
 def load_datasets(directory: str) -> list[tuple[str, dict]]:
