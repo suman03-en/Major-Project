@@ -13,6 +13,9 @@ def setup_logging(level: int = logging.INFO):
 class Settings(BaseSettings):
     BASE_DIR: str = Field(default_factory=lambda: os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
     QDRANT_URL: str
+    NEO4J_URI: str = "bolt://localhost:7687"
+    NEO4J_USER: str = "neo4j"
+    NEO4J_PASSWORD: str = "neo4j_pass"
     MISTRAL_API_KEY: str = ""
     OLLAMA_HOST: str = "http://localhost:11434"
     OLLAMA_MODEL: str = "qwen2.5:3b"
