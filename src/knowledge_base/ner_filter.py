@@ -2,17 +2,21 @@
 Clause pre-filter for the NER extraction pipeline.
 
 Filters chunks from the structured dataset JSON to identify only those
-clauses that are likely to contain business registration entities
-(offices, documents, steps, fees, durations).
+clauses that are likely to contain extractable process-related entities
+(offices, documents, steps, fees, durations, conditions, incentives).
 
-This reduces unnecessary Mistral API calls by ~60-70%.
+Uses a two-layer strategy:
+  1. Keyword group scoring (entity categories)
+  2. Procedural verb detection (must describe an action, not just define terms)
+
+This reduces unnecessary LLM calls by ~60-70%.
 """
 
 import re
 from typing import List, Dict, Tuple
 
 
-# Nepali keywords that indicate a clause is likely procedural/registration-related.
+# Nepali keywords that indicate a clause is likely process-related.
 # Grouped by entity category for scoring.
 KEYWORD_GROUPS = {
     "office": [
@@ -40,10 +44,33 @@ KEYWORD_GROUPS = {
     ],
 }
 
+# Procedural verbs/suffixes that indicate the clause describes an action,
+# not just a definition or declaration. A chunk must contain at least one
+# of these to be considered actionable.
+PROCEDURAL_VERBS = [
+    "पर्नेछ",          # must do (पर्नेछ / दिनु पर्नेछ)
+    "गर्नेछ",          # will do (गर्नेछ)
+    "दिनु",            # to give / submit (दिनु पर्ने)
+    "पेश गर्ने",       # to present/submit
+    "बुझाउनु",         # to submit/hand over
+    "दर्ता गर्ने",     # to register
+    "खुलाउनु",         # to disclose/show
+    "सक्नेछ",          # may/can (permissive action)
+    "लिनु",            # to take (अनुमति लिनु)
+    "गराउनु",          # causative — to get done
+    "गर्न",            # to do (infinitive — गर्न सक्ने)
+    "लिन",             # to take (infinitive)
+    "पठाउनु",          # to send
+    "पठाउने",          # will send
+    "प्रदान गर्ने",    # to provide/grant
+    "जारी गर्ने",      # to issue
+    "हुनेछ",           # it shall be (prescriptive)
+]
+
 # Chunk types that are never relevant for NER extraction
 SKIP_TYPES = {"preamble"}
 
-# Section titles that indicate non-procedural content (definitions, interpretation)
+# Section titles that indicate non-extractable content (definitions, interpretation)
 SKIP_SECTION_TITLES = [
     "परिभाषा",       # Definitions
     "संक्षिप्त नाम",  # Short title
@@ -57,12 +84,14 @@ MIN_RELEVANCE_SCORE = 2
 class ClauseFilter:
     """
     Filters chunks from the structured dataset JSON, selecting only
-    those likely to contain extractable business registration entities.
+    those likely to contain extractable process-related entities.
     
-    Scoring logic:
-    - Each keyword group match adds +1 to the chunk's relevance score.
-    - A chunk passes the filter if its score >= MIN_RELEVANCE_SCORE.
-    - Definition sections (परिभाषा) are always skipped.
+    Two-layer filtering:
+    1. Keyword scoring: Each keyword group match adds +1. Score >= MIN_RELEVANCE_SCORE.
+    2. Procedural verb check: Chunk must contain at least one actionable verb.
+       This catches declarative-only clauses that have keywords but no procedure.
+    
+    Definition sections (परिभाषा) are always skipped.
     """
 
     def __init__(self, min_score: int = MIN_RELEVANCE_SCORE):
@@ -73,6 +102,14 @@ class ClauseFilter:
             # Join keywords into a single alternation pattern
             pattern = "|".join(re.escape(kw) for kw in keywords)
             self._patterns[group_name] = re.compile(pattern)
+        
+        # Pre-compile procedural verb pattern
+        verb_pattern = "|".join(re.escape(v) for v in PROCEDURAL_VERBS)
+        self._verb_pattern = re.compile(verb_pattern)
+
+    def _has_procedural_verb(self, text: str) -> bool:
+        """Check if the text contains at least one procedural/actionable verb."""
+        return bool(self._verb_pattern.search(text))
 
     def score_chunk(self, chunk: dict) -> Tuple[int, Dict[str, List[str]]]:
         """
@@ -97,6 +134,11 @@ class ClauseFilter:
         
         # Skip very short chunks (likely headers or labels)
         if len(text) < 20:
+            return 0, {}
+
+        # Procedural verb gate: if the text has no actionable verb,
+        # it's likely a declarative/definitional statement — skip it.
+        if not self._has_procedural_verb(text):
             return 0, {}
 
         score = 0
@@ -138,14 +180,21 @@ class ClauseFilter:
         
         # Score distribution
         scores = {}
+        verb_rejected = 0
         for chunk in chunks:
+            text = chunk.get("text", "")
             score, _ = self.score_chunk(chunk)
             scores[score] = scores.get(score, 0) + 1
+            
+            # Count chunks rejected specifically by verb filter
+            if not self._has_procedural_verb(text) and len(text) >= 20:
+                verb_rejected += 1
         
         return {
             "total_chunks": total,
             "passed_filter": passed,
             "rejected": total - passed,
             "filter_rate_pct": round((total - passed) / total * 100, 1) if total > 0 else 0,
+            "verb_rejected": verb_rejected,
             "score_distribution": dict(sorted(scores.items())),
         }
