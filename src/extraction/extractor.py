@@ -21,6 +21,24 @@ _GARBAGE_PATTERNS = [
 ]
 
 
+# Legacy font (Preeti/Kantipur etc) scrambled words commonly extracted via PyMuPDF
+# These look like Devanagari but are mapped incorrectly by the PDF's internal font table.
+_LEGACY_FONT_SCRAMBLED_WORDS = [
+    'उद्योि',       # उद्योग
+    'दतान',         # दर्ता
+    'बमोशजम',       # बमोजिम
+    'िन्नाले',      # भन्नाले
+    'गनयम',         # नियम
+    'पछन',          # पर्छ
+    'लिानी',        # लगानी
+    'प्रगतस्पर्धी',   # प्रतिस्पर्धी
+    'तोद्धकएको',      # तोकिएको
+    'लेशखएको',      # लेखिएको
+    'प्रारम्ि',     # प्रारम्भ
+    'सम्बन्त्र्धी',   # सम्बन्धी
+]
+
+
 def _is_valid_nepali(text: str, min_devanagari_ratio: float = 0.3) -> bool:
     """
     Check whether extracted text is valid Nepali (Devanagari) content.
@@ -30,6 +48,7 @@ def _is_valid_nepali(text: str, min_devanagari_ratio: float = 0.3) -> bool:
       - Devanagari characters make up less than `min_devanagari_ratio` of
         the non-whitespace content (indicates legacy-font garbage)
       - Known garbage patterns are dominant
+      - Legacy font scrambled words are present
     """
     if not text:
         return False
@@ -56,6 +75,12 @@ def _is_valid_nepali(text: str, min_devanagari_ratio: float = 0.3) -> bool:
         matches = pattern.findall(non_ws)
         if len(matches) > 5:
             return False
+
+    # Check for legacy font scrambled words
+    scrambled_count = sum(1 for word in _LEGACY_FONT_SCRAMBLED_WORDS if word in text)
+    if scrambled_count >= 2:  # If at least 2 scrambled words are found, it's a corrupted PDF
+        logger.debug("Legacy font scrambled text detected (found %d corrupted words), forcing OCR.", scrambled_count)
+        return False
 
     return True
 
