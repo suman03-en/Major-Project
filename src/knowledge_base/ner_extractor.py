@@ -380,6 +380,10 @@ class NERExtractor:
             "format": "json",
             "stream": False,
             "think": False,          # Qwen3: disable chain-of-thought reasoning
+            "options": {
+                "temperature": 0,    # Deterministic output — no random variation
+                "top_p": 0.1,        # Narrow sampling for structured extraction
+            },
         }
         data = json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(
@@ -520,6 +524,18 @@ class NERExtractor:
         if word_count < 4:
             return None
 
+        # Reject "empty" steps: if ALL metadata fields are null/empty,
+        # the step is just restating the text with no extractable entities.
+        # These add noise to the graph without useful metadata.
+        has_office = bool(step.office and step.office.strip())
+        has_docs = bool(step.documents_required and len(step.documents_required) > 0)
+        has_fee = bool(step.fee and step.fee.strip())
+        has_duration = bool(step.duration and step.duration.strip())
+        has_prereq = bool(step.prerequisite and step.prerequisite.strip())
+
+        if not any([has_office, has_docs, has_fee, has_duration, has_prereq]):
+            return None
+
         # --- Clean office ---
         clean_office = step.office
         if clean_office:
@@ -543,6 +559,7 @@ class NERExtractor:
             r'^दफा\s*[०-९\d]+',           # "दफा १३"
             r'^खण्ड\s*\(',                 # "खण्ड (ख) मा..."
             r'^बमोजिम',                    # "बमोजिम" or "बमोजिमको"
+            r'बमोजिमको',                   # descriptions: "तोकिए बमोजिमको विवरण"
             r'^मिति$',
             r'^एक पटक$',
             r'^प्रतिशत$',
@@ -554,6 +571,15 @@ class NERExtractor:
             r'^कागजात$',
             r'^अन्य कुरा',                 # "अन्य कुराका अतिरिकत..."
             r'लेखिएको$',                   # sentence fragments ending in "लेखिएको"
+            r'^आवश्यक\s+(?!.*(?:प्रमाणपत्र|कागजात|प्रतिवेदन|फारम|निवेदन|प्रतिलिपि))',
+                                           # "आवश्यक विवरण" is not a doc, but
+                                           # "आवश्यक प्रमाणपत्र" is — only reject
+                                           # if no known document type follows
+            r'खुलाई$',                     # descriptions ending in "खुलाई"
+            r'सहित$',                      # descriptions ending in "सहित"
+            r'^नपुग\s',                    # "नपुग विवरण वा कागजात" — instruction, not doc
+            r'^तोकिएको\s+(?!.*(?:ढाँचामा|फारम))',  # "तोकिएको विवरण" not a doc,
+                                                     # but "तोकिएको ढाँचामा" is a form
         ]
         # Single-word generic nouns that are NOT documents
         single_word_rejects = {
@@ -566,6 +592,30 @@ class NERExtractor:
             'उद्योग दर्ता', 'नवीकरण', 'नामसारी', 'नाम परिवर्तन',
             'स्थानान्तरण', 'क्षमता वृद्धि', 'पुँजी वृद्धि',
         }
+        # Description patterns — these look like docs but are actually
+        # instructions/descriptions the LLM mistakenly extracted
+        description_rejects = [
+            r'^.*को\s+क्षेत्रफल\s+खुलाई',    # "जग्गाको क्षेत्रफल खुलाई"
+            r'^.*वा\s+कागजात$',               # "विवरण वा कागजात" — too generic
+            r'^प्रदेश\s+कानूनमा',              # "प्रदेश कानूनमा व्यवस्था..."
+            r'^राय\s+सहितको',                  # "राय सहितको प्रतिवेदन" — action, not doc
+        ]
+        # Verbs that indicate the office is ISSUING/PROVIDING something,
+        # meaning the doc is an OUTPUT, not an INPUT the applicant submits.
+        _issuance_verbs = [
+            'दिनु पर्नेछ', 'दिनेछ', 'उपलब्ध गराउनु', 'उपलब्ध गराउनेछ',
+            'जारी गर्नेछ', 'जारी गर्नु पर्नेछ', 'प्रदान गर्नेछ',
+            'प्रदान गर्नु पर्नेछ', 'दिन सक्नेछ',
+        ]
+        # Document types that are issued BY the office (outputs), never submitted by applicant
+        _output_doc_types = [
+            'प्रमाणपत्र', 'अनुमतिपत्र', 'इजाजतपत्र', 'स्वीकृति पत्र',
+        ]
+        # Generic notification nouns — actions, not documents
+        _notification_nouns = {
+            'लिखित जानकारी', 'जानकारी दिनु', 'सूचना', 'लिखित सूचना',
+        }
+
         clean_docs = []
         for doc in step.documents_required:
             doc = doc.strip()
@@ -576,8 +626,22 @@ class NERExtractor:
                 continue
             if any(re.match(p, doc) for p in doc_reject_patterns):
                 continue
+            if any(re.search(p, doc) for p in description_rejects):
+                continue
             if doc in service_type_keywords or doc in single_word_rejects:
                 continue
+            if doc in _notification_nouns:
+                continue
+
+            # Reject output-as-input confusion:
+            # If the action describes the office ISSUING something and the doc
+            # is a certificate/permit type, it's an output — not a required input.
+            action_lower = action  # already Nepali, no lowercasing needed
+            doc_is_output_type = any(t in doc for t in _output_doc_types)
+            action_is_issuance = any(v in action_lower for v in _issuance_verbs)
+            if doc_is_output_type and action_is_issuance:
+                continue
+
             clean_docs.append(doc)
 
         # --- Clean fee ---
