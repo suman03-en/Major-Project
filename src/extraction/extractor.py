@@ -1,7 +1,64 @@
 import os
+import re
+import logging
 import fitz
 import pytesseract
 from PIL import Image, ImageFilter, ImageOps
+
+logger = logging.getLogger(__name__)
+
+# Devanagari Unicode range: U+0900 – U+097F
+_DEVANAGARI_RE = re.compile(r'[\u0900-\u097F]')
+
+# Garbage patterns commonly seen when PyMuPDF extracts text from
+# Nepali PDFs that use non-Unicode legacy fonts or glyph-mapped fonts.
+# These produce runs of random Latin chars, PUA codepoints, or CID numbers.
+_GARBAGE_PATTERNS = [
+    re.compile(r'[\uE000-\uF8FF]{3,}'),          # Private Use Area runs
+    re.compile(r'(?:\d{3,}\s*){3,}'),              # runs of bare numbers
+    re.compile(r'[A-Za-z]{10,}'),                  # long Latin runs (not Nepali)
+    re.compile(r'[\x00-\x08\x0B\x0C\x0E-\x1F]'),  # control characters
+]
+
+
+def _is_valid_nepali(text: str, min_devanagari_ratio: float = 0.3) -> bool:
+    """
+    Check whether extracted text is valid Nepali (Devanagari) content.
+
+    Returns False if:
+      - Text is too short (< 20 non-whitespace chars)
+      - Devanagari characters make up less than `min_devanagari_ratio` of
+        the non-whitespace content (indicates legacy-font garbage)
+      - Known garbage patterns are dominant
+    """
+    if not text:
+        return False
+
+    stripped = text.strip()
+    if not stripped:
+        return False
+
+    # Count non-whitespace characters
+    non_ws = re.sub(r'\s', '', stripped)
+    if len(non_ws) < 20:
+        return False
+
+    # Ratio check: what fraction of non-whitespace chars are Devanagari?
+    devanagari_count = len(_DEVANAGARI_RE.findall(non_ws))
+    ratio = devanagari_count / len(non_ws)
+
+    if ratio < min_devanagari_ratio:
+        return False
+
+    # Check for garbage patterns — if any pattern has many matches,
+    # the text is likely from a legacy-font PDF
+    for pattern in _GARBAGE_PATTERNS:
+        matches = pattern.findall(non_ws)
+        if len(matches) > 5:
+            return False
+
+    return True
+
 
 class PdfExtractor:
     def __init__(self, pdf_path, tesseract_cmd=None):
@@ -12,11 +69,47 @@ class PdfExtractor:
             pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
         self.doc = fitz.open(pdf_path)
 
+        # Track extraction method stats
+        self._stats = {"digital": 0, "ocr": 0, "total": 0}
+
     def extract_all_pages(self):
-        """Yields the OCR extracted text for each page in the document."""
+        """
+        Yields (page_number, text) for each page.
+
+        Smart extraction strategy:
+          1. Try PyMuPDF native text extraction (fast, no OCR needed)
+          2. Validate the result is actually Nepali/Devanagari text
+          3. If garbage (legacy fonts, glyph-mapped, empty), fall back to OCR
+        """
         for page_num in range(len(self.doc)):
             page = self.doc.load_page(page_num)
-            yield page_num + 1, self._ocr_page(page)
+            self._stats["total"] += 1
+
+            text = self._extract_page(page, page_num + 1)
+            yield page_num + 1, text
+
+        # Log extraction method stats
+        logger.info(
+            "Extraction complete: %d pages total — %d digital, %d OCR",
+            self._stats["total"], self._stats["digital"], self._stats["ocr"]
+        )
+
+    def _extract_page(self, page, page_num: int) -> str:
+        """
+        Smart per-page extraction: try native text first, fall back to OCR.
+        """
+        # Attempt 1: Native text extraction (works for digital/text-layer PDFs)
+        native_text = page.get_text("text")
+
+        if _is_valid_nepali(native_text):
+            self._stats["digital"] += 1
+            logger.debug("Page %d: native text extraction (digital)", page_num)
+            return native_text
+
+        # Attempt 2: Fall back to OCR for scanned pages or garbage-Unicode pages
+        logger.debug("Page %d: native text invalid/empty, falling back to OCR", page_num)
+        self._stats["ocr"] += 1
+        return self._ocr_page(page)
 
     def _preprocess_for_ocr(self, img):
         """
