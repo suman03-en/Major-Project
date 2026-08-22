@@ -28,6 +28,8 @@ services:
     container_name: rag
     stdin_open: true
     tty: true
+    ports:
+      - "8000:8000"
     volumes:
       - ./input_pdfs:/app/input_pdfs
       - ./extracted_jsons:/app/extracted_jsons
@@ -42,6 +44,19 @@ services:
       - RECREATE_COLLECTION=${RECREATE_COLLECTION:-false}
       - ENABLE_RERANK=${ENABLE_RERANK:-false}
       - RUN_GRAPH_INGEST=${RUN_GRAPH_INGEST:-false}
+      - FORCE_OCR=${FORCE_OCR:-true}
+      # Surya OCR VRAM tuning for RTX 3050 4 GB
+      - RECOGNITION_BATCH_SIZE=2
+      - DETECTOR_BATCH_SIZE=2
+      - TORCH_CUDA_ALLOC_CONF=expandable_segments:True
+    # ── GPU passthrough (requires NVIDIA Container Toolkit on the host) ─────
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
     depends_on:
       qdrant:
         condition: service_started

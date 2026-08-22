@@ -1,5 +1,6 @@
 import os
 
+
 import glob
 import json
 import re
@@ -209,11 +210,12 @@ def main():
         print(f"\nProcessing {pdf_path}...")
 
         with PdfExtractor(pdf_path) as extractor:
-            # OCR all pages once (avoids double-processing pages 1-2)
             all_cleaned_pages = []
             for page_num, raw_text in extractor.extract_all_pages():
-                print(f"  OCR Page {page_num}/{len(extractor.doc)}...")
+                print(f"  [OCR] Page {page_num}/{len(extractor.doc)}...")
                 all_cleaned_pages.append(cleaner.clean(raw_text))
+
+            print(f"  Done: {extractor._stats['ocr']} pages processed via Surya OCR.")
 
         # Use first 2 pages for metadata extraction
         front_matter = "\n".join(all_cleaned_pages[:2])

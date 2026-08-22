@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     NEO4J_USER: str = "neo4j"
     NEO4J_PASSWORD: str = "neo4j_pass"
     MISTRAL_API_KEY: str = ""
+    MISTRAL_MODEL: str = "mistral-large-latest"
     OLLAMA_HOST: str = "http://localhost:11434"
     OLLAMA_MODEL: str = "qwen2.5:3b"
     
