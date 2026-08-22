@@ -58,10 +58,7 @@ class LegalChunkEmbedder:
         if device is None:
             import torch
             device = "cuda" if torch.cuda.is_available() else "cpu"
-            logger.info("Auto-detected device: %s", device)
-
-        logger.info("Loading BGEM3FlagModel model: %s", model_name)
-        use_fp16 = True if device == "cuda" else False
+            use_fp16 = True if device == "cuda" else False
         self.model = BGEM3FlagModel(model_name, use_fp16=use_fp16, device=device)
         self.batch_size = batch_size
         self.show_progress = show_progress

@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="ne">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nepali Legal RAG Assistant</title>
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Mukta:wght@400;500;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --primary: #4F46E5;
+            --primary-hover: #4338CA;
+            --bg-color: #0F172A;
+            --surface: #1E293B;
+            --surface-hover: #334155;
+            --text-main: #F8FAFC;
+            --text-muted: #94A3B8;
+            --border: #334155;
+            --accent: #38BDF8;
+        }
+
+        body {
+            font-family: 'Mukta', 'Inter', sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            height: 100vh;
+            overflow: hidden; /* Prevent page scrolling */
+        }
+
+        .container {
+            width: 100%;
+            max-width: 1200px;
+            padding: 1rem 2rem;
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+            height: 100%;
+            box-sizing: border-box;
+        }
+
+        header {
+            text-align: center;
+            padding: 0.5rem 0;
+            flex-shrink: 0; /* Keep header size fixed */
+        }
+
+        h1 {
+            font-size: 2rem;
+            margin: 0;
+            background: linear-gradient(135deg, #38BDF8, #818CF8);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            font-weight: 600;
+        }
+
+        p.subtitle {
+            color: var(--text-muted);
+            font-size: 1.1rem;
+            margin-top: 0.5rem;
+        }
+
+        .chat-container {
+            background-color: var(--surface);
+            border-radius: 1rem;
+            border: 1px solid var(--border);
+            padding: 1.5rem;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+            flex-grow: 1; /* Fill remaining height */
+            min-height: 0; /* Allows shrinking below content size to enable scrolling */
+        }
+
+        .chat-history {
+            flex-grow: 1;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+        }
+
+        .message {
+            max-width: 85%;
+            padding: 1rem;
+            border-radius: 0.75rem;
+            line-height: 1.5;
+            font-size: 1rem;
+            animation: fadeIn 0.3s ease-out;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .message.user {
+            align-self: flex-end;
+            background-color: var(--primary);
+            color: white;
+            border-bottom-right-radius: 0.25rem;
+        }
+
+        .message.bot {
+            align-self: flex-start;
+            background-color: var(--surface-hover);
+            color: var(--text-main);
+            border-bottom-left-radius: 0.25rem;
+            white-space: normal; /* Changed from pre-wrap because marked.js handles HTML */
+        }
+        
+        .message.bot p {
+            margin-top: 0;
+            margin-bottom: 0.75rem;
+        }
+        
+        .message.bot p:last-child {
+            margin-bottom: 0;
+        }
+        
+        .message.bot ul, .message.bot ol {
+            margin-top: 0.25rem;
+            margin-bottom: 0.75rem;
+            padding-left: 1.5rem;
+        }
+        
+        .message.bot li {
+            margin-bottom: 0.25rem;
+        }
+
+        .input-area {
+            display: flex;
+            gap: 1rem;
+            background: var(--bg-color);
+            padding: 0.5rem;
+            border-radius: 0.75rem;
+            border: 1px solid var(--border);
+        }
+
+        input[type="text"] {
+            flex-grow: 1;
+            background: transparent;
+            border: none;
+            color: var(--text-main);
+            font-size: 1rem;
+            padding: 0.75rem 1rem;
+            font-family: inherit;
+        }
+
+        input[type="text"]:focus {
+            outline: none;
+        }
+
+        button {
+            background-color: var(--primary);
+            color: white;
+            border: none;
+            padding: 0.75rem 1.5rem;
+            border-radius: 0.5rem;
+            font-size: 1rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            font-family: inherit;
+        }
+
+        button:hover {
+            background-color: var(--primary-hover);
+            transform: scale(1.02);
+        }
+
+        button:active {
+            transform: scale(0.98);
+        }
+
+        button:disabled {
+            background-color: var(--surface-hover);
+            color: var(--text-muted);
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .loading {
+            display: flex;
+            gap: 0.5rem;
+            align-items: center;
+            color: var(--text-muted);
+            font-size: 0.9rem;
+        }
+
+        .dot {
+            width: 8px;
+            height: 8px;
+            background-color: var(--accent);
+            border-radius: 50%;
+            animation: bounce 1.4s infinite ease-in-out both;
+        }
+
+        .dot:nth-child(1) { animation-delay: -0.32s; }
+        .dot:nth-child(2) { animation-delay: -0.16s; }
+        .dot:nth-child(3) { animation-delay: 0s; }
+
+        @keyframes bounce {
+            0%, 80%, 100% { transform: scale(0); }
+            40% { transform: scale(1); }
+        }
+
+        .citations {
+            margin-top: 1rem;
+            padding-top: 1rem;
+            border-top: 1px solid var(--border);
+            font-size: 0.85rem;
+            color: var(--text-muted);
+        }
+    </style>
+    <!-- Marked.js for Markdown parsing -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Bizzguide</h1>
+            <p class="subtitle">Nepali Legal Assistant (RAG Pipeline)</p>
+        </header>
+
+        <div class="chat-container">
+            <div class="chat-history" id="chatHistory">
+                <div class="message bot">नमस्ते! म नेपाली कानूनी AI हुँ। तपाईंलाई कुन ऐन वा नियमको बारेमा जान्नु छ?</div>
+            </div>
+            
+            <div class="input-area">
+                <input type="text" id="queryInput" placeholder="तपाईंको प्रश्न यहाँ लेख्नुहोस्... (Ask your legal question...)" onkeypress="handleKeyPress(event)">
+                <button id="sendBtn" onclick="sendQuery()">सोध्नुहोस्</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const chatHistory = document.getElementById('chatHistory');
+        const queryInput = document.getElementById('queryInput');
+        const sendBtn = document.getElementById('sendBtn');
+
+        function appendMessage(sender, text, isHtml = false) {
+            const msgDiv = document.createElement('div');
+            msgDiv.className = `message ${sender}`;
+            if (isHtml) {
+                msgDiv.innerHTML = text;
+            } else {
+                msgDiv.textContent = text;
+            }
+            chatHistory.appendChild(msgDiv);
+            chatHistory.scrollTop = chatHistory.scrollHeight;
+            return msgDiv;
+        }
+
+        function showLoading() {
+            const loaderDiv = document.createElement('div');
+            loaderDiv.className = 'message bot';
+            loaderDiv.id = 'loadingIndicator';
+            loaderDiv.innerHTML = `
+                <div class="loading">
+                    उत्तर खोज्दै... (Retrieving contexts and generating answer)
+                    <div class="dot"></div>
+                    <div class="dot"></div>
+                    <div class="dot"></div>
+                </div>
+            `;
+            chatHistory.appendChild(loaderDiv);
+            chatHistory.scrollTop = chatHistory.scrollHeight;
+        }
+
+        function hideLoading() {
+            const loader = document.getElementById('loadingIndicator');
+            if (loader) loader.remove();
+        }
+
+        async function sendQuery() {
+            const query = queryInput.value.trim();
+            if (!query) return;
+
+            // UI Updates
+            appendMessage('user', query);
+            queryInput.value = '';
+            queryInput.disabled = true;
+            sendBtn.disabled = true;
+            showLoading();
+
+            try {
+                const response = await fetch('/query', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ query: query, top_k: 5 })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
+                const data = await response.json();
+                hideLoading();
+
+                // Format the answer using marked.js to render Markdown properly
+                let htmlAnswer = marked.parse(data.answer);
+                
+                // Add citations if available
+                if (data.chunks && data.chunks.length > 0) {
+                    htmlAnswer += `<div class="citations"><strong>सन्दर्भ स्रोतहरू:</strong><ul>`;
+                    data.chunks.forEach((c, idx) => {
+                        let hierarchy = c.hierarchy;
+                        let act = c.act_source || "कम्पनी ऐन";
+                        let cite = act;
+                        if(hierarchy.sec) cite += `, दफा ${hierarchy.sec}`;
+                        htmlAnswer += `<li>[${idx+1}] ${cite}</li>`;
+                    });
+                    htmlAnswer += `</ul></div>`;
+                }
+
+                appendMessage('bot', htmlAnswer, true);
+
+            } catch (error) {
+                hideLoading();
+                appendMessage('bot', `त्रुटि (Error): ${error.message}\nPlease make sure the RAG pipeline is fully initialized.`);
+            } finally {
+                queryInput.disabled = false;
+                sendBtn.disabled = false;
+                queryInput.focus();
+            }
+        }
+
+        function handleKeyPress(event) {
+            if (event.key === 'Enter') {
+                sendQuery();
+            }
+        }
+    </script>
+</body>
+</html>

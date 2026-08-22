@@ -44,7 +44,7 @@ if [ $# -gt 0 ]; then
     exec "$@"
 else
     echo ""
-    echo "Container ready."
+    echo "Container ready. (OCR engine: Surya — GPU accelerated)"
     echo "Commands you can run inside container:"
     echo "  Extract PDFs  : docker compose exec rag python src/cli/pdf_extractor.py"
     echo "  Ingest JSONs  : docker compose exec rag python src/cli/ingest.py"

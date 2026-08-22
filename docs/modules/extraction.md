@@ -10,21 +10,23 @@ The extraction module is responsible for reading raw Nepali PDF files and conver
 
 **Key Components**:
 - **`PdfExtractor` Class**: A context manager (`__enter__` / `__exit__`) that wraps the `PyMuPDF` document object.
-- **`_preprocess_for_ocr(page)`**: The most critical function for OCR accuracy. It:
-  - Renders the PDF page at 300 DPI for high resolution.
-  - Converts the image to grayscale.
-  - Applies Contrast Limited Adaptive Histogram Equalization (CLAHE) to make the text stand out.
-  - Applies Otsu's Binarization to make the image pure black and white.
-  - Applies a Median Blur to remove background noise.
-- **`_ocr_page(page)`**: Passes the preprocessed image to Tesseract OCR using the specific `nep` (Nepali) language pack.
+- **`_is_valid_nepali(text)`**: Validates native-extracted text using Devanagari character ratio and known legacy-font garbage patterns. If the text is invalid, the page is sent to Surya OCR.
+- **`_load_surya_models()`**: Lazily loads Surya detection and recognition models into GPU on the first OCR page. Digital PDFs never pay the GPU warm-up cost.
+- **`_ocr_page(page)`**: Renders the page at 300 DPI, crops the header URL strip, and runs **Surya OCR** with Nepali (`ne`) language. Surya uses deep-learning-based layout detection + LSTM recognition — significantly more accurate than Tesseract on scanned Devanagari.
+- **`close()`**: Deletes Surya model references and calls `torch.cuda.empty_cache()` to free VRAM after extraction.
 
-**Dependencies**: `pymupdf` (fitz), `pytesseract`, `cv2` (OpenCV), `numpy`.
+**VRAM tuning** (RTX 3050 4 GB) is controlled by environment variables set in the Dockerfile and `compose.yaml`:
+- `RECOGNITION_BATCH_SIZE=2`
+- `DETECTOR_BATCH_SIZE=2`
+- `TORCH_CUDA_ALLOC_CONF=expandable_segments:True`
+
+**Dependencies**: `pymupdf` (fitz), `surya-ocr`, `torch` (CUDA 12.1), `pillow`.
 
 ---
 
 ## 2. `cleaner.py`
 
-**Purpose**: Normalizes the raw text output from Tesseract.
+**Purpose**: Normalizes the raw text output from Surya OCR.
 
 **Key Components**:
 - **`TextCleaner` Class**: Contains regex patterns to fix common OCR mistakes.
