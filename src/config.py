@@ -27,6 +27,8 @@ class Settings(BaseSettings):
     OLLAMA_MODEL: str = "qwen2.5:3b"
     ENABLE_RERANK: bool = False
     USE_GRAPH: bool = False
+    AGENT_MAX_LOOPS: int = 3
+    AGENT_MAX_PROVISIONS: int = 12
     
     # Derived directory paths
     EXTRACTED_JSONS_DIR: str = ""
