@@ -1,7 +1,8 @@
 import json
+import os
+
 import matplotlib.pyplot as plt
 import numpy as np
-import os
 
 # Load the JSON results
 with open('src/evaluation/evaluation_results.json', 'r', encoding='utf-8') as f:

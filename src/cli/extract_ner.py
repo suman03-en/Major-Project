@@ -18,18 +18,17 @@ Examples:
     python -m src.cli.extract_ner --input extracted_jsons/industrail_business_act_2063_dataset.json --filter-only
 """
 
+import argparse
+import json
+import logging
 import os
 import sys
-import json
-import argparse
-import logging
 import time
 
-
-from src.knowledge_base.ner_filter import ClauseFilter
-from src.knowledge_base.ner_extractor import NERExtractor
-from src.knowledge_base.schemas import NERPipelineResult
 from src.config import get_settings, setup_logging
+from src.knowledge_base.ner_extractor import NERExtractor
+from src.knowledge_base.ner_filter import ClauseFilter
+from src.knowledge_base.schemas import NERPipelineResult
 
 # Configure logging
 setup_logging()
@@ -70,7 +69,7 @@ def run_filter_only(data: dict) -> None:
     print(f"  Passed filter:    {stats['passed_filter']}")
     print(f"  Rejected:         {stats['rejected']}")
     print(f"  Filter rate:      {stats['filter_rate_pct']}%")
-    print(f"\n  Score distribution:")
+    print("\n  Score distribution:")
     for score, count in stats['score_distribution'].items():
         bar = "█" * min(count, 40)
         print(f"    Score {score}: {count:4d}  {bar}")
@@ -78,7 +77,7 @@ def run_filter_only(data: dict) -> None:
 
     # Show sample filtered chunks
     filtered = clause_filter.filter_chunks(chunks)
-    print(f"\n  Sample filtered chunks (first 10):")
+    print("\n  Sample filtered chunks (first 10):")
     for chunk in filtered[:10]:
         cid = chunk['id']
         score = chunk['_ner_score']
@@ -95,9 +94,9 @@ def run_pipeline(
     use_windowing: bool = False,
     batch_size: int = 0,
     provider: str = "auto",
-    ollama_host: str = None,
-    ollama_model: str = None,
-    mistral_model: str = "mistral-large-latest",
+    ollama_host: str | None = None,
+    ollama_model: str | None = None,
+    mistral_model: str = "mistral-large-2512",
 ) -> None:
     """Run the full NER extraction pipeline (filter → extract → save)."""
     act_meta = data.get('act_metadata', {})
@@ -105,7 +104,7 @@ def run_pipeline(
     chunks = data['chunks']
 
     print("\n" + "=" * 60)
-    print(f"  NER EXTRACTION PIPELINE")
+    print("  NER EXTRACTION PIPELINE")
     print(f"  Act: {act_title}")
     print(f"  Total chunks: {len(chunks)}")
     print("=" * 60)
@@ -173,10 +172,10 @@ def run_pipeline(
 
     # Summary
     total_steps = sum(len(e.steps) for e in entities)
-    offices = set(s.office.name for e in entities for s in e.steps if s.office)
-    documents = set(d for e in entities for s in e.steps for d in s.documents_required)
+    offices = {s.office.name for e in entities for s in e.steps if s.office}
+    documents = {d for e in entities for s in e.steps for d in s.documents_required}
     fees = [f for e in entities for s in e.steps for f in s.price_fees]
-    processes = set(e.process_name for e in entities if e.process_name)
+    processes = {e.process_name for e in entities if e.process_name}
 
     print("\n" + "=" * 60)
     print("  EXTRACTION SUMMARY")
@@ -225,8 +224,8 @@ def main():
     )
     parser.add_argument(
         "--mistral-model",
-        default="mistral-large-latest",
-        help="Mistral API model name. Default: mistral-large-latest",
+        default="mistral-large-2512",
+        help="Mistral API model name. Default: mistral-large-2512",
     )
     parser.add_argument(
         "--filter-only",

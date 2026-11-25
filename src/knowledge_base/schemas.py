@@ -10,21 +10,21 @@ enabling rich graph relationships like:
   (:Step)-[:NEXT_STEP]->(:Step)
 """
 
+
 from pydantic import BaseModel, Field, field_validator
-from typing import List, Optional
 
 
 class PriceFee(BaseModel):
     """A single fee or monetary cost extracted from a legal clause."""
-    type: Optional[str] = Field(default=None, description="Fee category, e.g., दर्ता दस्तुर, नवीकरण दस्तुर")
-    amount_raw: Optional[str] = Field(default=None, description="Original Nepali text, e.g., रु. १०,०००")
-    amount_npr: Optional[int] = Field(default=None, description="Normalized integer amount in NPR")
+    type: str | None = Field(default=None, description="Fee category, e.g., दर्ता दस्तुर, नवीकरण दस्तुर")
+    amount_raw: str | None = Field(default=None, description="Original Nepali text, e.g., रु. १०,०००")
+    amount_npr: int | None = Field(default=None, description="Normalized integer amount in NPR")
 
 
 class OfficeEntity(BaseModel):
     """A government office or authority referenced in the clause."""
     name: str = Field(description="Office name in Nepali, e.g., कम्पनी रजिष्ट्रारको कार्यालय")
-    level: Optional[str] = Field(default=None, description="Government level: केन्द्र, प्रदेश, स्थानीय")
+    level: str | None = Field(default=None, description="Government level: केन्द्र, प्रदेश, स्थानीय")
 
 
 class RawStepOutput(BaseModel):
@@ -34,11 +34,11 @@ class RawStepOutput(BaseModel):
     """
     step_number: int = Field(description="Sequential position of this step in the process")
     action: str = Field(default="", description="Complete description of the action/step in Nepali")
-    office: Optional[str] = Field(default=None, description="Government office where this step is performed")
-    documents_required: List[str] = Field(default_factory=list, description="Documents needed for this specific step")
-    fee: Optional[str] = Field(default=None, description="Government fee for this step as Nepali text")
-    duration: Optional[str] = Field(default=None, description="Time limit or deadline for this step")
-    prerequisite: Optional[str] = Field(default=None, description="Condition that must be met before this step")
+    office: str | None = Field(default=None, description="Government office where this step is performed")
+    documents_required: list[str] = Field(default_factory=list, description="Documents needed for this specific step")
+    fee: str | None = Field(default=None, description="Government fee for this step as Nepali text")
+    duration: str | None = Field(default=None, description="Time limit or deadline for this step")
+    prerequisite: str | None = Field(default=None, description="Condition that must be met before this step")
 
     @field_validator('documents_required', mode='before')
     @classmethod
@@ -65,8 +65,8 @@ class ClauseNEROutput(BaseModel):
     Designed for Neo4j graph DB: each step carries its own office,
     documents, fee, and duration — enabling per-step graph relationships.
     """
-    process_name: Optional[str] = Field(default=None, description="Name of the registration/administrative process described")
-    steps: List[RawStepOutput] = Field(default_factory=list, description="Sequential procedural steps with per-step metadata")
+    process_name: str | None = Field(default=None, description="Name of the registration/administrative process described")
+    steps: list[RawStepOutput] = Field(default_factory=list, description="Sequential procedural steps with per-step metadata")
 
     @field_validator('process_name', mode='before')
     @classmethod
@@ -89,11 +89,11 @@ class ProcessStep(BaseModel):
     """
     step_number: int = Field(description="Sequential position (1-based) within the process")
     action: str = Field(description="Complete description of the action/step in Nepali")
-    office: Optional[OfficeEntity] = Field(default=None, description="Office where this step is performed")
-    documents_required: List[str] = Field(default_factory=list, description="Documents needed for this specific step")
-    price_fees: List[PriceFee] = Field(default_factory=list, description="Fees for this specific step")
-    duration: Optional[str] = Field(default=None, description="Time limit or deadline for this step")
-    prerequisite: Optional[str] = Field(default=None, description="Condition required before this step")
+    office: OfficeEntity | None = Field(default=None, description="Office where this step is performed")
+    documents_required: list[str] = Field(default_factory=list, description="Documents needed for this specific step")
+    price_fees: list[PriceFee] = Field(default_factory=list, description="Fees for this specific step")
+    duration: str | None = Field(default=None, description="Time limit or deadline for this step")
+    prerequisite: str | None = Field(default=None, description="Condition required before this step")
 
 
 class ExtractedEntity(BaseModel):
@@ -117,8 +117,8 @@ class ExtractedEntity(BaseModel):
             "Example: 'ch2 (उद्योग दर्ता) › sec3 (दर्ता गराउनु पर्ने) › sub6 [subsection]'"
         )
     )
-    process_name: Optional[str] = Field(default=None, description="Name of the process described in this clause")
-    steps: List[ProcessStep] = Field(default_factory=list, description="Ordered procedural steps with per-step metadata")
+    process_name: str | None = Field(default=None, description="Name of the process described in this clause")
+    steps: list[ProcessStep] = Field(default_factory=list, description="Ordered procedural steps with per-step metadata")
 
 
 class NERPipelineResult(BaseModel):
@@ -127,4 +127,4 @@ class NERPipelineResult(BaseModel):
     act_slug: str
     total_chunks_processed: int
     total_chunks_filtered: int
-    entities: List[ExtractedEntity] = Field(default_factory=list)
+    entities: list[ExtractedEntity] = Field(default_factory=list)

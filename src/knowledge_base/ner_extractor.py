@@ -13,28 +13,32 @@ Features:
 - Context windowing: merges contiguous sub-clauses for richer extraction
 """
 
-import os
-import re
 import json
-import time
 import logging
-import urllib.request
+import re
+import time
 import urllib.error
-from typing import List, Optional, Tuple
+import urllib.request
 
-from pydantic import ValidationError
 from mistralai.client import Mistral
-
+from pydantic import ValidationError
 
 from src.config import get_settings
-from src.knowledge_base.schemas import ClauseNEROutput, RawStepOutput, ExtractedEntity, ProcessStep, PriceFee, OfficeEntity
+from src.knowledge_base.schemas import (
+    ClauseNEROutput,
+    ExtractedEntity,
+    OfficeEntity,
+    PriceFee,
+    ProcessStep,
+    RawStepOutput,
+)
 
 logger = logging.getLogger(__name__)
 
-from src.utils import nepali_to_int, get_ollama_installed_models, is_ollama_available
+from src.utils import get_ollama_installed_models, is_ollama_available, nepali_to_int
 
 
-def parse_price_fee(raw_text: Optional[str]) -> List[PriceFee]:
+def parse_price_fee(raw_text: str | None) -> list[PriceFee]:
     """
     Parse a price/fee string into structured PriceFee objects.
     Handles formats like: 'रु. १०,०००', '५०० रुपैयाँ', 'दस्तुर रु.५,०००'
@@ -66,7 +70,7 @@ def parse_price_fee(raw_text: Optional[str]) -> List[PriceFee]:
     return fees
 
 
-def parse_office(raw_text: Optional[str]) -> Optional[OfficeEntity]:
+def parse_office(raw_text: str | None) -> OfficeEntity | None:
     """Parse an office string into a structured OfficeEntity."""
     if not raw_text or not raw_text.strip():
         return None
@@ -311,9 +315,9 @@ class NERExtractor:
     def __init__(
         self,
         provider: str = "auto",
-        ollama_host: Optional[str] = None,
-        ollama_model: Optional[str] = None,
-        mistral_model: str = "mistral-large-latest",
+        ollama_host: str | None = None,
+        ollama_model: str | None = None,
+        mistral_model: str = "mistral-large-2512",
         max_retries: int = 5,
     ):
         settings = get_settings()
@@ -368,7 +372,7 @@ class NERExtractor:
                 raise ValueError("MISTRAL_API_KEY is required when using Mistral provider.")
             self.mistral_client = Mistral(api_key=settings.MISTRAL_API_KEY)
 
-    def _call_ollama(self, text: str) -> Optional[str]:
+    def _call_ollama(self, text: str) -> str | None:
         """Call Local Ollama API (e.g. Qwen 2.5) with JSON format enforcement."""
         url = f"{self.ollama_host}/api/chat"
         payload = {
@@ -401,7 +405,7 @@ class NERExtractor:
                         resp_data = json.loads(body)
                         content = resp_data.get("message", {}).get("content", "")
                         return content
-            except Exception as e:
+            except (OSError, ValueError) as e:
                 if attempt < self.max_retries:
                     wait_time = 2 * attempt
                     logger.warning(f"Ollama call failed (attempt {attempt}/{self.max_retries}): {e}. Retrying in {wait_time}s...")
@@ -410,7 +414,7 @@ class NERExtractor:
                     logger.error(f"Ollama call failed after {attempt} attempts: {e}")
                     return None
 
-    def _call_mistral(self, text: str) -> Optional[str]:
+    def _call_mistral(self, text: str) -> str | None:
         """Call Mistral API with exponential backoff retry."""
         for attempt in range(1, self.max_retries + 1):
             try:
@@ -425,7 +429,7 @@ class NERExtractor:
                 content = response.choices[0].message.content
                 return content
 
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 error_str = str(e)
                 is_retriable = any(code in error_str for code in ["429", "500", "502", "503"])
 
@@ -440,7 +444,7 @@ class NERExtractor:
                     logger.error(f"Mistral API failed after {attempt} attempts: {e}")
                     return None
 
-    def _parse_response(self, content: Optional[str]) -> Optional[ClauseNEROutput]:
+    def _parse_response(self, content: str | None) -> ClauseNEROutput | None:
         """
         Parse and validate JSON response into a ClauseNEROutput.
         Handles markdown backticks, minor JSON syntax errors, and
@@ -450,12 +454,9 @@ class NERExtractor:
             return None
 
         content = content.strip()
-        if content.startswith("```json"):
-            content = content[7:]
-        if content.startswith("```"):
-            content = content[3:]
-        if content.endswith("```"):
-            content = content[:-3]
+        content = content.removeprefix("```json")
+        content = content.removeprefix("```")
+        content = content.removesuffix("```")
         content = content.strip()
 
         # Remove trailing commas before } or ]
@@ -515,7 +516,7 @@ class NERExtractor:
             steps=clean_steps,
         )
 
-    def _clean_step(self, step: RawStepOutput) -> Optional[RawStepOutput]:
+    def _clean_step(self, step: RawStepOutput) -> RawStepOutput | None:
         """Clean a single step's fields. Returns None if step should be discarded."""
         action = step.action.strip() if step.action else ""
 
@@ -688,7 +689,7 @@ class NERExtractor:
             prerequisite=clean_prereq,
         )
 
-    def extract_from_chunk(self, chunk: dict) -> Optional[ExtractedEntity]:
+    def extract_from_chunk(self, chunk: dict) -> ExtractedEntity | None:
         """Extract step-centric NER entities from a single dataset chunk."""
         text = chunk.get("text", "")
         if not text.strip():
@@ -733,10 +734,10 @@ class NERExtractor:
 
     def extract_batch(
         self,
-        chunks: List[dict],
-        delay_between_calls: Optional[float] = None,
+        chunks: list[dict],
+        delay_between_calls: float | None = None,
         progress_callback=None,
-    ) -> List[ExtractedEntity]:
+    ) -> list[ExtractedEntity]:
         """
         Extract NER entities from a batch of chunks.
         Automatically uses 0s delay for Ollama and 2s delay for Mistral API.
@@ -761,7 +762,7 @@ class NERExtractor:
         return entities
 
     @staticmethod
-    def build_context_window(chunks: List[dict], window_size: int = 3) -> List[dict]:
+    def build_context_window(chunks: list[dict], window_size: int = 3) -> list[dict]:
         """Merge contiguous sub-clauses sharing the same parent section."""
         if not chunks or window_size <= 1:
             return chunks

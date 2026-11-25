@@ -13,20 +13,19 @@ Usage:
     python src/search.py --no-rerank          # Disable cross-encoder re-ranking
 """
 
-import sys
-import os
-
-import logging
 import argparse
-from typing import Optional
+import logging
+import os
+import sys
+
+from src.config import get_settings, setup_logging
 
 # ---------------------------------------------------------------------------
 # Project imports
 # ---------------------------------------------------------------------------
 from src.embedding.embedder import LegalChunkEmbedder
-from src.embedding.vector_store import QdrantVectorStore
 from src.embedding.reranker import CrossEncoderReranker
-from src.config import get_settings, setup_logging
+from src.embedding.vector_store import QdrantVectorStore
 
 # ---------------------------------------------------------------------------
 # Logging (quiet by default for clean CLI output)
@@ -106,8 +105,8 @@ def run_search(
     query: str,
     search_type: str = "hybrid",
     top_k: int = 5,
-    act_filter: Optional[str] = None,
-    reranker: Optional[CrossEncoderReranker] = None,
+    act_filter: str | None = None,
+    reranker: CrossEncoderReranker | None = None,
 ) -> list[dict]:
     """Encode query (dense & sparse), search Qdrant, and optionally re-rank."""
     embeddings = embedder.embed_texts([query])
@@ -137,8 +136,8 @@ def interactive_mode(
     store: QdrantVectorStore,
     search_type: str,
     top_k: int,
-    act_filter: Optional[str],
-    reranker: Optional[CrossEncoderReranker] = None,
+    act_filter: str | None,
+    reranker: CrossEncoderReranker | None = None,
 ) -> None:
     """Run the interactive REPL search loop."""
     # Show collection stats on startup
@@ -147,16 +146,16 @@ def interactive_mode(
         print(f"\n  Qdrant collection : {info['name']}")
         print(f"  Total points      : {info['points_count']}")
         print(f"  Status            : {info['status']}")
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         print(f"\n  ⚠  Could not reach Qdrant: {exc}")
         sys.exit(1)
 
     rerank_active = reranker is not None
 
-    print(f"\n  Type your query in Nepali or English.")
-    print(f"  Commands: 'exit'/'quit' to leave, 'top <N>' to change count,")
-    print(f"            'type <dense|sparse|hybrid>' to change search type,")
-    print(f"            'rerank on/off' to toggle cross-encoder re-ranking.\n")
+    print("\n  Type your query in Nepali or English.")
+    print("  Commands: 'exit'/'quit' to leave, 'top <N>' to change count,")
+    print("            'type <dense|sparse|hybrid>' to change search type,")
+    print("            'rerank on/off' to toggle cross-encoder re-ranking.\n")
 
     current_type = search_type
     
@@ -267,7 +266,7 @@ def main() -> None:
     print("  Embedder ready.")
 
     # ── Initialize cross-encoder reranker ───────────────────────────────
-    reranker: Optional[CrossEncoderReranker] = None
+    reranker: CrossEncoderReranker | None = None
     if not args.no_rerank:
         print("  Loading cross-encoder reranker (BAAI/bge-reranker-v2-m3)...")
         reranker = CrossEncoderReranker()

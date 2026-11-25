@@ -13,15 +13,12 @@ Usage:
     python -m src.cli.rag_chat --rerank                # Enable cross-encoder reranking
 """
 
-import sys
-import os
-import logging
 import argparse
-from typing import Optional
+import logging
+import sys
 
 from src.config import get_settings, setup_logging
-from src.rag.rag_pipeline import RAGPipeline
-from src.rag.rag_pipeline import RAG_SYSTEM_PROMPT
+from src.rag.rag_pipeline import RAG_SYSTEM_PROMPT, RAGPipeline
 
 # ---------------------------------------------------------------------------
 # Logging (quiet by default for clean CLI output)
@@ -38,14 +35,14 @@ if sys.platform == "win32":
 def print_banner(rag: RAGPipeline) -> None:
     """Print startup banner with connection status."""
     print(f"\n{'═' * 70}")
-    print(f"  नेपाली कानूनी RAG प्रणाली  (Nepali Legal RAG System)")
+    print("  नेपाली कानूनी RAG प्रणाली  (Nepali Legal RAG System)")
     print(f"{'═' * 70}")
 
     # Qdrant status
     try:
         info = rag.vector_store.get_collection_info()
         print(f"  Qdrant        : {info['name']} ({info['points_count']} chunks)")
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         print(f"  Qdrant        : ⚠ Not reachable ({exc})")
 
     # Neo4j status
@@ -54,10 +51,10 @@ def print_banner(rag: RAGPipeline) -> None:
             stats = rag.graph_store.get_graph_stats()
             node_count = sum(n["count"] for n in stats.get("nodes", []))
             print(f"  Neo4j Graph   : Connected ({node_count} nodes)")
-        except Exception:
-            print(f"  Neo4j Graph   : ⚠ Connected but query failed")
+        except Exception:  # noqa: BLE001
+            print("  Neo4j Graph   : ⚠ Connected but query failed")
     else:
-        print(f"  Neo4j Graph   : Disabled")
+        print("  Neo4j Graph   : Disabled")
 
     # LLM status
     print(f"  LLM Model     : {rag.llm_client.model}")
@@ -126,7 +123,7 @@ def display_context(rag: RAGPipeline) -> None:
 def run_one_shot(rag: RAGPipeline, query: str, show_context: bool = False) -> None:
     """Run a single query and print the answer."""
     print(f"\n  Query: {query}\n")
-    print(f"  Retrieving context...", end=" ", flush=True)
+    print("  Retrieving context...", end=" ", flush=True)
 
     # Use streaming for the one-shot output
     print("Generating answer...\n")
@@ -221,7 +218,7 @@ def interactive_mode(rag: RAGPipeline) -> None:
 
         # ── Run RAG query ────────────────────────────────────────────
         print()
-        print(f"  Retrieving context... ", end="", flush=True)
+        print("  Retrieving context... ", end="", flush=True)
 
         # To show reranking progress, we manually step through the pipeline
         chunks = rag.retrieve_chunks(query)
@@ -244,7 +241,7 @@ def interactive_mode(rag: RAGPipeline) -> None:
         first_token = True
         for token in rag.llm_client.stream(RAG_SYSTEM_PROMPT, context):
             if first_token:
-                print(f"Done.\n")
+                print("Done.\n")
                 print(f"{'─' * 70}")
                 first_token = False
             print(token, end="", flush=True)
@@ -294,7 +291,7 @@ def main() -> None:
         "--model",
         type=str,
         default=None,
-        help="Mistral model name (default: from .env or mistral-large-latest).",
+        help="Mistral model name (default: from .env or mistral-large-2512).",
     )
     parser.add_argument(
         "--rerank",
@@ -323,7 +320,7 @@ def main() -> None:
 
     from src.embedding.embedder import LegalChunkEmbedder
     from src.embedding.vector_store import QdrantVectorStore
-    from src.llm.llm_client import MistralLLMClient
+    from src.llm.llm_client import create_llm_client
 
     print("  Loading BGE-M3 embedder... (first run downloads ~2 GB)")
     embedder = LegalChunkEmbedder(show_progress=False)
@@ -339,7 +336,7 @@ def main() -> None:
         reranker = CrossEncoderReranker()
         print("  ✓ Reranker ready.")
 
-    llm_client = MistralLLMClient(model=args.model)
+    llm_client = create_llm_client(model=args.model)
     print(f"  ✓ LLM client ready ({llm_client.model}).")
 
     rag = RAGPipeline(
