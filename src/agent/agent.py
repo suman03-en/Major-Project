@@ -33,9 +33,11 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from src.agent.intent_classifier import IntentClassifier, IntentType
+from src.agent.iterative_retriever import IterativeRetriever
 from src.agent.procedure_navigator import NavigationResult, ProcedureNavigator
 from src.agent.session_store import InMemorySessionStore, SessionState
 from src.agent.translator import QueryTranslator, detect_language, is_romanized_nepali
+from src.rag.rag_pipeline import RAG_SYSTEM_PROMPT
 
 if TYPE_CHECKING:
     from src.agent.session_store import SessionStore
@@ -130,6 +132,7 @@ class LegalAgent:
         session_store: SessionStore | None = None,
         translator: QueryTranslator | None = None,
         translate_backoff_sec: float = 1.0,
+        iterative_retriever: IterativeRetriever | None = None,
     ) -> None:
         self._rag = rag_pipeline
         self._graph = graph_store
@@ -140,6 +143,9 @@ class LegalAgent:
         self._translator = translator or QueryTranslator(self._llm)
         self._translate_backoff_sec = translate_backoff_sec
         self._navigator = ProcedureNavigator(graph_store) if graph_store else None
+        self._retriever = iterative_retriever or IterativeRetriever(
+            rag_pipeline, llm_client=self._llm
+        )
 
         # Lazy import to avoid circular imports at module load time
         from src.agent.document_preparer import DocumentPreparer
@@ -365,6 +371,35 @@ class LegalAgent:
             navigation=nav_result,
         )
 
+    def _run_iterative_rag(
+        self,
+        query: str,
+        retrieval_query: str,
+        lang: str,
+        on_step: Callable[[str, str], None] | None = None,
+    ) -> dict[str, Any]:
+        """Run bounded iterative retrieval and synthesize a grounded answer."""
+        retrieval = self._retriever.retrieve(
+            query,
+            retrieval_query=retrieval_query,
+            on_step=on_step,
+        )
+        context = self._rag.assemble_context(
+            query,
+            retrieval.chunks,
+            retrieval.graph,
+            response_language=lang,
+        )
+        if on_step:
+            on_step("generate", "Generating grounded legal answer…")
+        answer = self._llm.generate(RAG_SYSTEM_PROMPT, context)
+        return {
+            "answer": answer,
+            "chunks": retrieval.chunks,
+            "graph": retrieval.graph,
+            "context": context,
+        }
+
     def _handle_legal_fact(
         self,
         query: str,
@@ -374,12 +409,12 @@ class LegalAgent:
         sid: str,
         on_step: Callable[[str, str], None] | None = None,
     ) -> AgentResponse:
-        """Run the full RAG pipeline and return a grounded legal answer."""
+        """Run bounded iterative RAG and return a grounded legal answer."""
         try:
-            result = self._rag.answer(
+            result = self._run_iterative_rag(
                 query,
                 retrieval_query=retrieval_query,
-                response_language=lang,
+                lang=lang,
                 on_step=on_step,
             )
             session.last_chunks = result.get("chunks", [])
@@ -442,10 +477,10 @@ class LegalAgent:
 
         # RAG answer (may add context on top of the navigation)
         try:
-            rag_result = self._rag.answer(
+            rag_result = self._run_iterative_rag(
                 query,
                 retrieval_query=retrieval_query,
-                response_language=lang,
+                lang=lang,
                 on_step=on_step,
             )
             session.last_chunks = rag_result.get("chunks", [])

@@ -57,6 +57,7 @@ RULES
 2. SYNTHESIS RULE (IMPORTANT):
    - Legal acts rarely state a complete "how-to" guide in one single paragraph; instead, steps, eligibility, required documents, offices, and fees are spread across multiple sections (दफा/उपदफा) and procedural nodes.
    - Combine and synthesize all relevant details from the provided chunks and graph steps into a clear, actionable answer.
+   - If the retrieved context only partially covers the question after retrieval completes, provide a grounded partial answer with exact citations for what is supported, and explicitly note any remaining uncovered gaps or missing details.
    - Only state "उपलब्ध सन्दर्भमा यस प्रश्नको पर्याप्त जानकारी छैन।" if the provided context truly contains no relevant provisions or steps for the question.
 3. CITATION RULE (CRITICAL):
    - Each context chunk has a "📌 उद्धृत गर्नुहोस्" (Cite As) label.
@@ -226,6 +227,15 @@ class RAGPipeline:
         logger.info("Retrieved %d chunks for query: %s", len(results), query[:80])
         return results
 
+    def search_clauses(
+        self,
+        query: str,
+        top_k: int = 8,
+        act_filter: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Search statutory provisions and procedural clauses in Qdrant."""
+        return self.retrieve_chunks(query, top_k=top_k, act_filter=act_filter)
+
     # ------------------------------------------------------------------
     # Stage 2: Retrieve structured steps from Neo4j graph
     # ------------------------------------------------------------------
@@ -257,6 +267,14 @@ class RAGPipeline:
         except Exception as e:  # noqa: BLE001
             logger.warning("Graph retrieval failed: %s", e)
             return []
+
+    def search_graph(
+        self,
+        query: str,
+        chunks: list[dict[str, Any]] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Search Neo4j procedural graph for workflows matching *query* and *chunks*."""
+        return self.retrieve_graph_context(chunks or [], query)
 
     # ------------------------------------------------------------------
     # Stage 3: Assemble the context prompt
@@ -292,6 +310,59 @@ class RAGPipeline:
         if "clause" in hierarchy:
             parts.append(f"खण्ड ({hierarchy['clause']})")
         return " → ".join(parts) if parts else "—"
+
+    def _points_to_chunks(
+        self,
+        points: list[Any],
+        seen_ids: set[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Convert Qdrant scroll points into normalized provision dicts."""
+        chunks: list[dict[str, Any]] = []
+        for pt in points:
+            payload = pt.payload or {}
+            cid = payload.get("chunk_id", "")
+            text = payload.get("text", "")
+            if (seen_ids is not None and cid in seen_ids) or len(text.strip()) < MIN_CHUNK_TEXT_LEN:
+                continue
+            chunks.append({
+                "chunk_id": cid,
+                "act_source": payload.get("act_source", ""),
+                "type": payload.get("type", ""),
+                "hierarchy": payload.get("hierarchy", {}),
+                "text": text,
+                "stats": payload.get("stats", {}),
+                "provisos": payload.get("provisos", []),
+                "explanations": payload.get("explanations", []),
+            })
+        return chunks
+
+    def fetch_section(
+        self,
+        sec_num: int,
+        act_source: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """
+        Fetch all provisions for a given section number from Qdrant by scrolling
+        ``hierarchy.sec == sec_num`` (without requiring ``hierarchy.ch``).
+        """
+        from qdrant_client.models import FieldCondition, Filter, MatchValue
+
+        must = [FieldCondition(key="hierarchy.sec", match=MatchValue(value=sec_num))]
+        if act_source:
+            must.append(FieldCondition(key="act_source", match=MatchValue(value=act_source)))
+
+        try:
+            points, _ = self.vector_store.client.scroll(
+                collection_name=self.vector_store.collection_name,
+                scroll_filter=Filter(must=must),
+                limit=30,
+                with_payload=True,
+                with_vectors=False,
+            )
+            return self._points_to_chunks(points)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("fetch_section(%s) failed: %s", sec_num, e)
+            return []
 
     def _fetch_section_siblings(
         self,
@@ -330,25 +401,7 @@ class RAGPipeline:
                 with_payload=True,
                 with_vectors=False,
             )
-
-            siblings = []
-            for pt in points:
-                payload = pt.payload or {}
-                cid = payload.get("chunk_id", "")
-                text = payload.get("text", "")
-                if cid in seen_ids or len(text.strip()) < MIN_CHUNK_TEXT_LEN:
-                    continue
-                siblings.append({
-                    "chunk_id": cid,
-                    "act_source": payload.get("act_source", ""),
-                    "type": payload.get("type", ""),
-                    "hierarchy": payload.get("hierarchy", {}),
-                    "text": text,
-                    "stats": payload.get("stats", {}),
-                    "provisos": payload.get("provisos", []),
-                    "explanations": payload.get("explanations", []),
-                })
-            return siblings
+            return self._points_to_chunks(points, seen_ids=seen_ids)
 
         except Exception as e:  # noqa: BLE001
             logger.warning("Sibling fetch failed: %s", e)
