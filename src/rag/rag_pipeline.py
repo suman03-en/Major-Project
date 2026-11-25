@@ -30,6 +30,7 @@ from src.embedding.vector_store import QdrantVectorStore
 from src.knowledge_base.graph_store import Neo4jGraphStore
 from src.llm.base import BaseLLMClient
 from src.llm.llm_client import create_llm_client
+from src.rag.verifier import VerificationLayer
 
 logger = logging.getLogger(__name__)
 
@@ -122,6 +123,7 @@ class RAGPipeline:
         use_reranker: bool = False,
         top_k: int = 5,
         search_type: str = "hybrid",
+        verifier: VerificationLayer | None = None,
     ) -> None:
         settings = get_settings()
 
@@ -175,6 +177,7 @@ class RAGPipeline:
 
         self.top_k = top_k
         self.search_type = search_type
+        self.verifier = verifier or VerificationLayer()
 
     # ------------------------------------------------------------------
     # Stage 1: Retrieve relevant chunks from Qdrant
@@ -333,6 +336,7 @@ class RAGPipeline:
                 "stats": payload.get("stats", {}),
                 "provisos": payload.get("provisos", []),
                 "explanations": payload.get("explanations", []),
+                "status": payload.get("status"),
             })
         return chunks
 
@@ -616,11 +620,18 @@ class RAGPipeline:
         _emit("generate", "Generating grounded legal answer…")
         response = self.llm_client.generate(RAG_SYSTEM_PROMPT, context)
 
+        # 5. Deterministic verification (0 LLM calls)
+        _emit("verify", "Verifying citations and temporal status…")
+        verification = self.verifier.verify(
+            response, chunks=chunks, graph=graph_context
+        )
+
         return {
-            "answer": response,
+            "answer": verification.answer,
             "chunks": chunks,
             "graph": graph_context,
             "context": context,
+            "verification": verification,
         }
 
     def answer_stream(
