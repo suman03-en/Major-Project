@@ -20,7 +20,7 @@ from src.agent.session_store import InMemorySessionStore
 from src.config import get_settings, setup_logging
 from src.embedding.embedder import LegalChunkEmbedder
 from src.embedding.vector_store import QdrantVectorStore
-from src.llm.llm_client import create_llm_client
+from src.llm.llm_client import create_helper_llm_client, create_llm_client
 from src.rag.rag_pipeline import RAGPipeline
 
 # Basic setup
@@ -62,6 +62,7 @@ async def lifespan(app: FastAPI):
         rag_pipeline=rag_pipeline,
         graph_store=graph_store,
         llm_client=llm_client,
+        helper_llm_client=create_helper_llm_client(),
         session_store=session_store,
     )
 

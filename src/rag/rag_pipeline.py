@@ -20,6 +20,7 @@ Usage:
 """
 
 import logging
+import math
 from collections.abc import Callable, Iterator
 from typing import Any
 
@@ -29,7 +30,10 @@ from src.embedding.reranker import CrossEncoderReranker
 from src.embedding.vector_store import QdrantVectorStore
 from src.knowledge_base.graph_store import Neo4jGraphStore
 from src.llm.base import BaseLLMClient
-from src.llm.llm_client import create_llm_client
+from src.llm.llm_client import (
+    create_llm_client,
+    handle_rate_limit_response,
+)
 from src.rag.verifier import VerificationLayer
 
 logger = logging.getLogger(__name__)
@@ -42,48 +46,58 @@ CONTEXT_OVERFETCH: int = 3       # Over-fetch to compensate for empty/short chun
 MIN_CHUNK_TEXT_LEN: int = 10     # Skip chunks shorter than this
 RELEVANCE_THRESHOLD: float = 0.08  # Min reranker score when no graph steps match
 
+
+def estimate_tokens(text: str) -> int:
+    """Estimate LLM token count with script-aware weighting for Devanagari text."""
+    if not text:
+        return 0
+    total = 0.0
+    for ch in text:
+        code = ord(ch)
+        if 0x0900 <= code <= 0x097F:
+            total += 0.9
+        elif code > 0x007F:
+            total += 0.8
+        else:
+            total += 0.25
+    return math.ceil(total)
+
+
+def _truncate_to_token_budget(text: str, max_tokens: int) -> str:
+    """Truncate *text* cleanly so its estimated tokens fit within *max_tokens*."""
+    if max_tokens <= 0 or not text:
+        return ""
+    if estimate_tokens(text) <= max_tokens:
+        return text
+    lo, hi = 0, len(text)
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        candidate = text[:mid].rstrip() + "…"
+        if estimate_tokens(candidate) <= max_tokens:
+            lo = mid
+        else:
+            hi = mid - 1
+    return text[:lo].rstrip() + "…" if lo > 0 else ""
+
+
+def _infer_response_language(query: str, response_language: str | None) -> str:
+    """Resolve explicit *response_language* or infer ``'ne'``/``'en'`` from *query*."""
+    if response_language:
+        return response_language
+    return "ne" if any(0x0900 <= ord(ch) <= 0x097F for ch in query) else "en"
+
+
 # ---------------------------------------------------------------------------
-# RAG System Prompt
+# RAG System Prompt (condensed for free-tier TPM efficiency)
 # ---------------------------------------------------------------------------
-RAG_SYSTEM_PROMPT = """You are a helpful legal assistant for Nepali business registration and administrative procedures.
+RAG_SYSTEM_PROMPT = """You are a grounded legal assistant for Nepali business registration and administrative procedures.
+Answer ONLY from the provided Legal Provisions and Procedural Steps; do not use outside knowledge.
 
-Your job is to answer the user's question using ONLY the context provided below. The context contains:
-1. **Legal Text Chunks** — relevant excerpts from Nepali laws and acts
-2. **Procedural Steps** — step-by-step processes extracted from a knowledge graph
-
-═══════════════════════════════════════════
-RULES
-═══════════════════════════════════════════
-1. Answer ONLY from the provided context. Do NOT use outside knowledge.
-2. SYNTHESIS RULE (IMPORTANT):
-   - Legal acts rarely state a complete "how-to" guide in one single paragraph; instead, steps, eligibility, required documents, offices, and fees are spread across multiple sections (दफा/उपदफा) and procedural nodes.
-   - Combine and synthesize all relevant details from the provided chunks and graph steps into a clear, actionable answer.
-   - If the retrieved context only partially covers the question after retrieval completes, provide a grounded partial answer with exact citations for what is supported, and explicitly note any remaining uncovered gaps or missing details.
-   - Only state "उपलब्ध सन्दर्भमा यस प्रश्नको पर्याप्त जानकारी छैन।" if the provided context truly contains no relevant provisions or steps for the question.
-3. CITATION RULE (CRITICAL):
-   - Each context chunk has a "📌 उद्धृत गर्नुहोस्" (Cite As) label.
-   - You MUST use ONLY that label when citing sources.
-   - NEVER infer section/subsection numbers from inside the text body.
-     Text may contain cross-references like "उपदफा (४) बमोजिम" — these
-     refer to OTHER sections, not the current chunk's own location.
-   - Example: If a chunk's cite label says "दफा ६१, उपदफा (७)",
-     always cite it as "दफा ६१ को उपदफा (७)", even if the text mentions "उपदफा (४)".
-4. For procedural questions, present steps in a clear numbered format.
-5. Include relevant details like:
-   - Required documents (आवश्यक कागजातहरू)
-   - Government offices to visit (सम्बन्धित कार्यालय)
-   - Fees (दस्तुर/शुल्क)
-   - Time limits (समय सीमा)
-6. Answer in the SAME LANGUAGE as the user's question (Nepali or English).
-7. Be concise but thorough. Do not repeat the same information.
-8. If multiple processes or acts are relevant, organize your answer clearly by process/act.
-
-═══════════════════════════════════════════
-RESPONSE FORMAT
-═══════════════════════════════════════════
-- Use clear headings and numbered lists for procedures
-- Bold important terms, offices, and deadlines
-- At the end, add a "स्रोत" (Source) section listing the acts referenced"""
+RULES:
+1. Synthesis: Combine scattered Provisions (दफा/उपदफा) and Procedural Steps into a clear, actionable answer. If context only partially covers the question, answer what is supported with exact citations and note remaining gaps. Only state "उपलब्ध सन्दर्भमा यस प्रश्नको पर्याप्त जानकारी छैन।" when no relevant Provisions or Procedures exist.
+2. Citations (CRITICAL): Each Provision has a "📌 उद्धृत गर्नुहोस्" label. Cite ONLY that exact label—never infer section/subsection numbers from cross-references inside the text body (e.g., "उपदफा (४) बमोजिम").
+3. Procedures & Details: Use numbered steps and include required documents (आवश्यक कागजातहरू), offices (सम्बन्धित कार्यालय), fees (दस्तुर/शुल्क), and time limits (समय सीमा).
+4. Language & Format: Reply concisely in the user's question language (Nepali or English), organized by process/act with bold key terms/offices/deadlines, and end with a "स्रोत" (Source) section listing referenced acts."""
 
 
 class RAGPipeline:
@@ -124,6 +138,8 @@ class RAGPipeline:
         top_k: int = 5,
         search_type: str = "hybrid",
         verifier: VerificationLayer | None = None,
+        max_context_tokens: int | None = None,
+        max_siblings_per_section: int | None = None,
     ) -> None:
         settings = get_settings()
 
@@ -178,6 +194,16 @@ class RAGPipeline:
         self.top_k = top_k
         self.search_type = search_type
         self.verifier = verifier or VerificationLayer()
+        self.max_context_tokens = (
+            max_context_tokens
+            if max_context_tokens is not None
+            else int(getattr(settings, "MAX_CONTEXT_TOKENS", 3500))
+        )
+        self.max_siblings_per_section = (
+            max_siblings_per_section
+            if max_siblings_per_section is not None
+            else int(getattr(settings, "MAX_SIBLINGS_PER_SECTION", 2))
+        )
 
     # ------------------------------------------------------------------
     # Stage 1: Retrieve relevant chunks from Qdrant
@@ -411,6 +437,192 @@ class RAGPipeline:
             logger.warning("Sibling fetch failed: %s", e)
             return []
 
+    def _format_provision_block(
+        self,
+        index: int,
+        chunk: dict[str, Any],
+        include_explanations: bool = True,
+        text_override: str | None = None,
+    ) -> str:
+        """Format a single Provision entry with its canonical citation label."""
+        act = chunk.get("act_source", "Unknown")
+        h_dict = chunk.get("hierarchy", {})
+        hierarchy = self._format_hierarchy(h_dict)
+        citation = self._format_citation(act, h_dict)
+        text = chunk.get("text", "") if text_override is None else text_override
+
+        extra_parts = [f"  तर: {proviso}" for proviso in chunk.get("provisos", [])]
+        if include_explanations:
+            for explanation in chunk.get("explanations", []):
+                extra_parts.append(f"  स्पष्टीकरण: {explanation}")
+
+        block = (
+            f"[सन्दर्भ {index}]\n"
+            f"  ऐन: {act}\n"
+            f"  स्थान: {hierarchy}\n"
+            f"  📌 उद्धृत गर्नुहोस्: {citation}\n"
+            f"  पाठ: {text}"
+        )
+        if extra_parts:
+            block += "\n" + "\n".join(extra_parts)
+        return block
+
+    def _format_procedure_block(self, proc: dict[str, Any]) -> str:
+        """Format a Procedure entry compactly, avoiding duplicate step rollups."""
+        lines = [f"प्रक्रिया: {proc['process_name']}"]
+        steps = proc.get("steps", [])
+        step_docs: set[str] = set()
+        step_offices: set[str] = set()
+
+        for step in steps:
+            step_text = f"  चरण {step['step_number']}: {step['action']}"
+            office = step.get("office")
+            if office:
+                step_offices.add(str(office))
+                step_text += f"\n    कार्यालय: {office}"
+            if step.get("documents") and any(step["documents"]):
+                valid_docs = [str(d) for d in step["documents"] if d]
+                if valid_docs:
+                    step_docs.update(valid_docs)
+                    step_text += f"\n    कागजात: {', '.join(valid_docs)}"
+            if step.get("fees") and any(step["fees"]):
+                valid_fees = [str(f) for f in step["fees"] if f]
+                if valid_fees:
+                    step_text += f"\n    दस्तुर: {', '.join(valid_fees)}"
+            if step.get("duration"):
+                step_text += f"\n    समय: {step['duration']}"
+            if step.get("prerequisite"):
+                step_text += f"\n    पूर्वशर्त: {step['prerequisite']}"
+            lines.append(step_text)
+
+        missing_docs = [str(d) for d in proc.get("documents", []) if d and str(d) not in step_docs]
+        if missing_docs:
+            lines.append(f"  सम्पूर्ण आवश्यक कागजातहरू: {', '.join(missing_docs)}")
+        missing_offices = [
+            str(o) for o in proc.get("offices", []) if o and str(o) not in step_offices
+        ]
+        if missing_offices:
+            lines.append(f"  सम्बन्धित कार्यालयहरू: {', '.join(missing_offices)}")
+        return "\n".join(lines)
+
+    def _pack_primary_provisions(
+        self,
+        provisions: list[dict[str, Any]],
+        prov_budget: int,
+        header_cost: int,
+    ) -> tuple[list[str], list[dict[str, Any]], set[str], int]:
+        """Pack primary Provisions in rank order within *prov_budget*."""
+        packed: list[str] = []
+        primary: list[dict[str, Any]] = []
+        seen_ids: set[str] = set()
+        used = header_cost if provisions else 0
+
+        for provision in provisions:
+            pid = provision.get("chunk_id", "")
+            if pid and pid in seen_ids:
+                continue
+            if pid:
+                seen_ids.add(pid)
+
+            idx = len(packed) + 1
+            block = self._format_provision_block(idx, provision, include_explanations=True)
+            cost = estimate_tokens(block)
+            if used + cost > prov_budget:
+                compact = self._format_provision_block(idx, provision, include_explanations=False)
+                compact_cost = estimate_tokens(compact)
+                if used + compact_cost <= prov_budget:
+                    block, cost = compact, compact_cost
+                elif not packed:
+                    shell = self._format_provision_block(
+                        idx, provision, include_explanations=False, text_override=""
+                    )
+                    avail = max(0, prov_budget - used - estimate_tokens(shell))
+                    trimmed = _truncate_to_token_budget(provision.get("text", ""), avail)
+                    block = self._format_provision_block(
+                        idx, provision, include_explanations=False, text_override=trimmed
+                    )
+                    cost = estimate_tokens(block)
+                else:
+                    break
+
+            packed.append(block)
+            primary.append(provision)
+            used += cost
+
+        return packed, primary, seen_ids, used
+
+    def _append_section_siblings(
+        self,
+        primary_provisions: list[dict[str, Any]],
+        packed_provisions: list[str],
+        seen_ids: set[str],
+        prov_budget: int,
+        used_prov_tokens: int,
+    ) -> int:
+        """Append Section siblings only while spare budget remains, capped per Section."""
+        if self.max_siblings_per_section <= 0 or not primary_provisions:
+            return used_prov_tokens
+
+        expanded_sections: set[tuple[Any, Any, Any]] = set()
+        for provision in primary_provisions:
+            if prov_budget - used_prov_tokens <= 40:
+                break
+            prov_type = provision.get("type", "")
+            h = provision.get("hierarchy", {})
+            section_key = (provision.get("act_source", ""), h.get("ch"), h.get("sec"))
+            if prov_type not in ("clause", "subsection") or section_key in expanded_sections:
+                continue
+            expanded_sections.add(section_key)
+            siblings = self._fetch_section_siblings(provision, seen_ids)
+            for sib in siblings[: self.max_siblings_per_section]:
+                sid = sib.get("chunk_id", "")
+                if sid:
+                    if sid in seen_ids:
+                        continue
+                    seen_ids.add(sid)
+                idx = len(packed_provisions) + 1
+                sib_block = self._format_provision_block(idx, sib, include_explanations=False)
+                sib_cost = estimate_tokens(sib_block)
+                if used_prov_tokens + sib_cost > prov_budget:
+                    break
+                packed_provisions.append(sib_block)
+                used_prov_tokens += sib_cost
+
+        return used_prov_tokens
+
+    def _pack_procedures(
+        self,
+        proc_blocks: list[str],
+        proc_header: str,
+        budget: int,
+        used_total: int,
+    ) -> list[str]:
+        """Append formatted Procedures within the remaining token *budget*."""
+        out: list[str] = []
+        proc_added = False
+        for block in proc_blocks:
+            header_cost = estimate_tokens(proc_header) if not proc_added else 0
+            block_cost = estimate_tokens(block)
+            if used_total + header_cost + block_cost > budget:
+                if proc_added:
+                    break
+                avail = max(0, budget - used_total - header_cost)
+                if avail <= 0:
+                    break
+                trimmed = _truncate_to_token_budget(block, avail)
+                if not trimmed:
+                    break
+                block = trimmed
+                block_cost = estimate_tokens(block)
+            if not proc_added:
+                out.append(proc_header)
+                used_total += header_cost
+                proc_added = True
+            out.append(block)
+            out.append("")
+            used_total += block_cost
+        return out
+
     def assemble_context(
         self,
         query: str,
@@ -419,117 +631,48 @@ class RAGPipeline:
         response_language: str | None = None,
     ) -> str:
         """
-        Build the full context string that gets sent to the LLM along with
-        the user's question.
+        Build a token-budgeted context string for the LLM.
 
-        For clause-level and subsection-level chunks, sibling chunks from the
-        same section are fetched from Qdrant to give the LLM full context
-        (e.g., all penalty tiers when one clause is retrieved).
+        Packs directly retrieved Provisions and Procedures first within
+        ``max_context_tokens``, then appends Section siblings only while spare
+        budget remains (capped at ``max_siblings_per_section`` per Section).
         """
-        sections: list[str] = []
-
-        # Collect all sibling chunks to provide parent/sibling context
-        expanded_chunks: list[dict[str, Any]] = []
-        seen_ids: set = set()
-        expanded_sections: set = set()  # Track (act, ch, sec) already expanded
-
-        for chunk in chunks:
-            cid = chunk.get("chunk_id", "")
-            if cid not in seen_ids:
-                expanded_chunks.append(chunk)
-                seen_ids.add(cid)
-
-            # For clause or subsection chunks, fetch siblings from Qdrant
-            chunk_type = chunk.get("type", "")
-            h = chunk.get("hierarchy", {})
-            section_key = (chunk.get("act_source", ""), h.get("ch"), h.get("sec"))
-
-            if chunk_type in ("clause", "subsection") and section_key not in expanded_sections:
-                expanded_sections.add(section_key)
-                siblings = self._fetch_section_siblings(chunk, seen_ids)
-                for sib in siblings:
-                    sid = sib.get("chunk_id", "")
-                    if sid not in seen_ids:
-                        expanded_chunks.append(sib)
-                        seen_ids.add(sid)
-
-        # ── Section 1: Legal text chunks ─────────────────────────────
-        if expanded_chunks:
-            sections.append("═══ कानूनी पाठ सन्दर्भहरू (Legal Text Context) ═══\n")
-            for i, chunk in enumerate(expanded_chunks, 1):
-                act = chunk.get("act_source", "Unknown")
-                h_dict = chunk.get("hierarchy", {})
-                hierarchy = self._format_hierarchy(h_dict)
-                citation = self._format_citation(act, h_dict)
-                text = chunk.get("text", "")
-
-                # Include provisos and explanations if present
-                extra_parts = []
-                for proviso in chunk.get("provisos", []):
-                    extra_parts.append(f"  तर: {proviso}")
-                for explanation in chunk.get("explanations", []):
-                    extra_parts.append(f"  स्पष्टीकरण: {explanation}")
-                extra_text = "\n".join(extra_parts)
-
-                section = (
-                    f"[सन्दर्भ {i}]\n"
-                    f"  ऐन: {act}\n"
-                    f"  स्थान: {hierarchy}\n"
-                    f"  📌 उद्धृत गर्नुहोस्: {citation}\n"
-                    f"  पाठ: {text}"
-                )
-                if extra_text:
-                    section += f"\n{extra_text}"
-                sections.append(section)
-
-        # ── Section 2: Graph-derived procedural steps ────────────────
-        if graph_context:
-            sections.append("\n═══ प्रक्रियागत चरणहरू (Procedural Steps from Knowledge Graph) ═══\n")
-            for proc in graph_context:
-                process_name = proc["process_name"]
-                steps = proc.get("steps", [])
-                docs = proc.get("documents", [])
-                offices = proc.get("offices", [])
-
-                sections.append(f"प्रक्रिया: {process_name}")
-
-                if steps:
-                    for step in steps:
-                        step_text = f"  चरण {step['step_number']}: {step['action']}"
-                        if step.get("office"):
-                            step_text += f"\n    कार्यालय: {step['office']}"
-                        if step.get("documents") and any(step["documents"]):
-                            valid_docs = [d for d in step["documents"] if d]
-                            if valid_docs:
-                                step_text += f"\n    कागजात: {', '.join(valid_docs)}"
-                        if step.get("fees") and any(step["fees"]):
-                            valid_fees = [str(f) for f in step["fees"] if f]
-                            if valid_fees:
-                                step_text += f"\n    दस्तुर: {', '.join(valid_fees)}"
-                        if step.get("duration"):
-                            step_text += f"\n    समय: {step['duration']}"
-                        if step.get("prerequisite"):
-                            step_text += f"\n    पूर्वशर्त: {step['prerequisite']}"
-                        sections.append(step_text)
-
-                if docs:
-                    sections.append(
-                        f"  सम्पूर्ण आवश्यक कागजातहरू: {', '.join(docs)}"
-                    )
-                if offices:
-                    sections.append(
-                        f"  सम्बन्धित कार्यालयहरू: {', '.join(offices)}"
-                    )
-                sections.append("")  # blank line between processes
-
-        # ── Final assembly ───────────────────────────────────────────
-        context_text = "\n".join(sections)
         lang_hint = ""
         if response_language == "en":
             lang_hint = "\n[Instruction: Respond in English.]"
         elif response_language == "roman":
             lang_hint = "\n[Instruction: Respond in clear Romanized Nepali (or English if technical legal terms are clearer).]"
-        return f"{context_text}\n\n═══ प्रश्न (Question) ═══\n{query}{lang_hint}"
+        footer = f"\n\n═══ प्रश्न (Question) ═══\n{query}{lang_hint}"
+        budget = max(0, self.max_context_tokens - estimate_tokens(footer))
+
+        proc_blocks = [self._format_procedure_block(proc) for proc in graph_context]
+        proc_header = "\n═══ प्रक्रियागत चरणहरू (Procedural Steps from Knowledge Graph) ═══\n"
+        proc_reserve = 0
+        if proc_blocks and budget > 0:
+            total_proc_tokens = estimate_tokens(proc_header + "\n\n".join(proc_blocks))
+            proc_reserve = min(total_proc_tokens, budget // 2)
+
+        prov_budget = max(0, budget - proc_reserve)
+        prov_header = "═══ कानूनी पाठ सन्दर्भहरू (Legal Text Context) ═══\n"
+        packed_provisions, primary_provisions, seen_ids, used_prov_tokens = (
+            self._pack_primary_provisions(chunks, prov_budget, estimate_tokens(prov_header))
+        )
+        used_prov_tokens = self._append_section_siblings(
+            primary_provisions, packed_provisions, seen_ids, prov_budget, used_prov_tokens
+        )
+
+        sections: list[str] = []
+        used_total = 0
+        if packed_provisions:
+            sections.append(prov_header)
+            sections.extend(packed_provisions)
+            used_total = used_prov_tokens
+
+        if proc_blocks:
+            sections.extend(self._pack_procedures(proc_blocks, proc_header, budget, used_total))
+
+        context_text = "\n".join(sections)
+        return f"{context_text}{footer}"
 
     # ------------------------------------------------------------------
     # Stage 4: Generate answer
@@ -620,6 +763,17 @@ class RAGPipeline:
         # 4. Generate answer
         _emit("generate", "Generating grounded legal answer…")
         response = self.llm_client.generate(RAG_SYSTEM_PROMPT, context)
+        rate_msg = handle_rate_limit_response(
+            response, _infer_response_language(query, response_language), "RAG generation"
+        )
+        if rate_msg is not None:
+            return {
+                "answer": rate_msg,
+                "chunks": chunks,
+                "graph": graph_context,
+                "context": context,
+                "verification": None,
+            }
 
         # 5. Deterministic verification (0 LLM calls)
         _emit("verify", "Verifying citations and temporal status…")
@@ -674,7 +828,18 @@ class RAGPipeline:
         }
 
         # 4. Stream the LLM response
-        yield from self.llm_client.stream(RAG_SYSTEM_PROMPT, context)
+        it = iter(self.llm_client.stream(RAG_SYSTEM_PROMPT, context))
+        first = next(it, None)
+        if first is None:
+            return
+        rate_msg = handle_rate_limit_response(
+            first, _infer_response_language(query, response_language), "RAG streaming"
+        )
+        if rate_msg is not None:
+            yield rate_msg
+            return
+        yield first
+        yield from it
 
     # ------------------------------------------------------------------
     # Cleanup
