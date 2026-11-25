@@ -90,8 +90,8 @@ class _FakeLLMClient:
 class TestRAGPipelineIterativeTools(unittest.TestCase):
     def test_config_defaults_and_fetch_section_without_chapter(self) -> None:
         settings = get_settings()
-        self.assertEqual(settings.AGENT_MAX_LOOPS, 3)
-        self.assertEqual(settings.AGENT_MAX_PROVISIONS, 12)
+        self.assertEqual(settings.AGENT_MAX_LOOPS, 2)
+        self.assertEqual(settings.AGENT_MAX_PROVISIONS, 8)
 
         payloads = [
             {
@@ -293,7 +293,6 @@ class TestLegalAgentIterativeWiring(unittest.TestCase):
         sec166 = [_make_chunk("c-166", sec=166, text="मुनाफा वितरण नगर्ने कम्पनी सम्बन्धी व्यवस्था।")]
         llm = _FakeLLMClient([
             '{"sufficient": false, "missing": "sec 166", "next_actions": [{"tool": "fetch_section", "sec_num": 166}]}',
-            '{"sufficient": true, "missing": "", "next_actions": []}',
             "Final grounded answer citing दफा ३ and दफा १६६.",
         ])
         rag = RAGPipeline(
@@ -357,7 +356,6 @@ class TestLegalAgentIterativeWiring(unittest.TestCase):
         initial = [_make_chunk("c-3", sec=3)]
         llm = _FakeLLMClient([
             '{"sufficient": false, "missing": "fee schedule in Rule 5", "next_actions": [{"tool": "search_clauses", "query": "fee schedule"}]}',
-            '{"sufficient": false, "missing": "fee schedule in Rule 5", "next_actions": []}',
             "Partial answer based on Section 3.",
         ])
         rag = RAGPipeline(

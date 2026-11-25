@@ -1,7 +1,7 @@
 """
 Bounded Iterative Retriever
 ===========================
-Multi-loop retrieval orchestrator (``max_loops = 3``, ``max_provisions = 12``)
+Multi-loop retrieval orchestrator (``max_loops = 2``, ``max_provisions = 8``)
 that combines vector clause search, section cross-reference lookup, and
 Neo4j knowledge-graph procedural search.
 """

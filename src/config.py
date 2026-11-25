@@ -22,13 +22,19 @@ class Settings(BaseSettings):
     LLM_BASE_URL: str = ""
     LLM_API_KEY: str = ""
     LLM_MODEL: str = ""
+    LLM_HELPER_MODEL: str = ""
     LLM_FALLBACKS: str = ""
+    LLM_MAX_RETRIES: int = 4
+    LLM_RETRY_BASE_SECONDS: float = 2.0
+    LLM_RETRY_MAX_WAIT_SECONDS: float = 60.0
     OLLAMA_HOST: str = "http://localhost:11434"
     OLLAMA_MODEL: str = "qwen2.5:3b"
     ENABLE_RERANK: bool = False
     USE_GRAPH: bool = False
-    AGENT_MAX_LOOPS: int = 3
-    AGENT_MAX_PROVISIONS: int = 12
+    AGENT_MAX_LOOPS: int = 2
+    AGENT_MAX_PROVISIONS: int = 8
+    MAX_CONTEXT_TOKENS: int = 3500
+    MAX_SIBLINGS_PER_SECTION: int = 2
     
     # Derived directory paths
     EXTRACTED_JSONS_DIR: str = ""

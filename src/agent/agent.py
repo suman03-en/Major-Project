@@ -37,6 +37,10 @@ from src.agent.iterative_retriever import IterativeRetriever
 from src.agent.procedure_navigator import NavigationResult, ProcedureNavigator
 from src.agent.session_store import InMemorySessionStore, SessionState
 from src.agent.translator import QueryTranslator, detect_language, is_romanized_nepali
+from src.llm.llm_client import (
+    create_helper_llm_client,
+    handle_rate_limit_response,
+)
 from src.rag.rag_pipeline import RAG_SYSTEM_PROMPT
 from src.rag.verifier import VerificationLayer
 
@@ -132,21 +136,27 @@ class LegalAgent:
         llm_client: BaseLLMClient | None = None,
         session_store: SessionStore | None = None,
         translator: QueryTranslator | None = None,
-        translate_backoff_sec: float = 1.0,
+        translate_backoff_sec: float = 0.0,
         iterative_retriever: IterativeRetriever | None = None,
         verifier: VerificationLayer | None = None,
+        helper_llm_client: BaseLLMClient | None = None,
     ) -> None:
         self._rag = rag_pipeline
         self._graph = graph_store
         self._llm = llm_client or rag_pipeline.llm_client
+        self._helper_llm = (
+            helper_llm_client
+            if helper_llm_client is not None
+            else (create_helper_llm_client() or self._llm)
+        )
         self._store: SessionStore = session_store or InMemorySessionStore()
 
         self._classifier = IntentClassifier()
-        self._translator = translator or QueryTranslator(self._llm)
+        self._translator = translator or QueryTranslator(self._helper_llm)
         self._translate_backoff_sec = translate_backoff_sec
         self._navigator = ProcedureNavigator(graph_store) if graph_store else None
         self._retriever = iterative_retriever or IterativeRetriever(
-            rag_pipeline, llm_client=self._llm
+            rag_pipeline, llm_client=self._helper_llm
         )
         self._verifier = verifier or getattr(rag_pipeline, "verifier", None) or VerificationLayer()
 
@@ -280,7 +290,7 @@ class LegalAgent:
 
         if intent == IntentType.DOCUMENT_PREP:
             return self._handle_document_prep(
-                query, retrieval_query, session, sid, on_step=on_step
+                query, retrieval_query, session, lang, sid, on_step=on_step
             )
 
         if intent in (IntentType.LEGAL_FACT, IntentType.UNKNOWN):
@@ -398,6 +408,15 @@ class LegalAgent:
         if on_step:
             on_step("generate", "Generating grounded legal answer…")
         answer = self._llm.generate(RAG_SYSTEM_PROMPT, context)
+        rate_msg = handle_rate_limit_response(answer, lang, "answer generation")
+        if rate_msg is not None:
+            return {
+                "answer": rate_msg,
+                "chunks": retrieval.chunks,
+                "graph": retrieval.graph,
+                "context": context,
+                "verification": None,
+            }
         if on_step:
             on_step("verify", "Verifying citations and temporal status…")
         verification = self._verifier.verify(
@@ -457,6 +476,7 @@ class LegalAgent:
         query: str,
         retrieval_query: str,
         session: SessionState,
+        lang: str,
         sid: str,
         on_step: Callable[[str, str], None] | None = None,
     ) -> AgentResponse:
@@ -466,9 +486,13 @@ class LegalAgent:
         result = self._doc_preparer.prepare(
             query, session, retrieval_query=retrieval_query
         )
+        answer = result["answer"]
+        rate_msg = handle_rate_limit_response(answer, lang, "document preparation")
+        if rate_msg is not None:
+            answer = rate_msg
         session.last_chunks = result.get("chunks", [])
         return AgentResponse(
-            answer=result["answer"],
+            answer=answer,
             intent=IntentType.DOCUMENT_PREP,
             session_id=sid,
             chunks=result.get("chunks", []),
