@@ -337,6 +337,130 @@ class TestLegalAgentRouting(unittest.TestCase):
         self.assertNotIn("{", resp_ne.answer)
         self.assertIn("मिनेट", resp_ne.answer)
 
+    def test_multi_turn_continuity_rewrites_followup_and_persists_turns(self):
+        from src.agent.agent import LegalAgent
+        from src.agent.iterative_retriever import RetrievalResult
+        from src.agent.session_store import InMemorySessionStore
+
+        primary_llm = MagicMock()
+        primary_llm.generate.side_effect = ["Answer 1 about Section 43.", "Answer 2 about penalties."]
+        helper_llm = MagicMock()
+        helper_llm.generate.return_value = "कम्पनी ऐन २०६३ दफा ४३ को जरिवाना"
+
+        mock_rag = MagicMock()
+        mock_rag.graph_store = None
+        mock_rag.llm_client = primary_llm
+        mock_rag.verifier = None
+        mock_rag.assemble_context.return_value = "context"
+
+        mock_retriever = MagicMock()
+        mock_retriever.retrieve.return_value = RetrievalResult(chunks=[], graph=[], loops_used=1)
+
+        store = InMemorySessionStore()
+        agent = LegalAgent(
+            rag_pipeline=mock_rag,
+            graph_store=None,
+            llm_client=primary_llm,
+            helper_llm_client=helper_llm,
+            session_store=store,
+        )
+        agent._retriever = mock_retriever
+
+        # Turn 1: 0 helper rewrite calls
+        agent.respond("दफा ४३ के भन्छ?", session_id="conv-mt")
+        self.assertEqual(helper_llm.generate.call_count, 0)
+
+        # Turn 2: follow-up without repeating topic triggers rewrite + passes history
+        agent.respond("त्यसको जरिवाना कति हो?", session_id="conv-mt")
+        self.assertEqual(helper_llm.generate.call_count, 1)
+        self.assertEqual(
+            mock_retriever.retrieve.call_args_list[1].kwargs["retrieval_query"],
+            "कम्पनी ऐन २०६३ दफा ४३ को जरिवाना",
+        )
+        self.assertTrue(len(mock_rag.assemble_context.call_args_list[1].kwargs.get("conversation_history", [])) >= 2)
+        self.assertEqual(len(store.get("conv-mt").messages), 4)  # type: ignore[union-attr]
+
+    def test_regenerate_replaces_last_assistant_message_without_duplicating_user(self):
+        from src.agent.agent import LegalAgent
+        from src.agent.iterative_retriever import RetrievalResult
+        from src.agent.session_store import InMemorySessionStore
+
+        primary_llm = MagicMock()
+        primary_llm.generate.side_effect = ["First answer", "Regenerated answer"]
+        helper_llm = MagicMock()
+        helper_llm.generate.return_value = "दफा ३"
+
+        mock_rag = MagicMock()
+        mock_rag.graph_store = None
+        mock_rag.llm_client = primary_llm
+        mock_rag.verifier = None
+        mock_rag.assemble_context.return_value = "context"
+
+        mock_retriever = MagicMock()
+        mock_retriever.retrieve.return_value = RetrievalResult(chunks=[], graph=[], loops_used=1)
+
+        store = InMemorySessionStore()
+        agent = LegalAgent(
+            rag_pipeline=mock_rag,
+            graph_store=None,
+            llm_client=primary_llm,
+            helper_llm_client=helper_llm,
+            session_store=store,
+        )
+        agent._retriever = mock_retriever
+
+        agent.respond("दफा ३ के भन्छ?", session_id="conv-rg")
+        resp2 = agent.respond("दफा ३ के भन्छ?", session_id="conv-rg", regenerate=True)
+
+        self.assertEqual(resp2.answer, "Regenerated answer")
+        msgs = store.get("conv-rg").messages  # type: ignore[union-attr]
+        self.assertEqual(len(msgs), 2)
+        self.assertEqual([m.role for m in msgs], ["user", "assistant"])
+        self.assertEqual(msgs[1].content, "Regenerated answer")
+
+    def test_respond_stream_emits_step_token_and_final_events_and_persists(self):
+        from src.agent.agent import LegalAgent
+        from src.agent.iterative_retriever import RetrievalResult
+        from src.agent.session_store import InMemorySessionStore
+
+        primary_llm = MagicMock()
+        primary_llm.stream.return_value = iter(["Hello ", "Nepal."])
+
+        mock_rag = MagicMock()
+        mock_rag.graph_store = None
+        mock_rag.llm_client = primary_llm
+        mock_rag.verifier = None
+        mock_rag.assemble_context.return_value = "context"
+        mock_rag.format_citations.return_value = [
+            {"label": "कम्पनी ऐन, २०६३, दफा 3", "excerpt": "पाठ", "status": "active"}
+        ]
+
+        mock_retriever = MagicMock()
+        mock_retriever.retrieve.return_value = RetrievalResult(
+            chunks=[{"chunk_id": "c-1", "act_source": "company_act_2063", "hierarchy": {"sec": 3}, "text": "पाठ"}],
+            graph=[],
+            loops_used=1,
+        )
+
+        store = InMemorySessionStore()
+        agent = LegalAgent(
+            rag_pipeline=mock_rag,
+            graph_store=None,
+            llm_client=primary_llm,
+            session_store=store,
+        )
+        agent._retriever = mock_retriever
+
+        events = list(agent.respond_stream("What is section 3?", session_id="conv-stream"))
+        names = [e[0] for e in events]
+        self.assertIn("step", names)
+        self.assertEqual([e[1]["text"] for e in events if e[0] == "token"], ["Hello ", "Nepal."])
+        finals = [e[1] for e in events if e[0] == "final"]
+        self.assertEqual(len(finals), 1)
+        self.assertEqual(finals[0]["answer"], "Hello Nepal.")
+        self.assertEqual(len(finals[0]["citations"]), 1)
+        self.assertEqual(len(store.get("conv-stream").messages), 2)  # type: ignore[union-attr]
+
 
 # ---------------------------------------------------------------------------
 # 4. QueryTranslator

@@ -39,6 +39,7 @@ class Settings(BaseSettings):
     # Derived directory paths
     EXTRACTED_JSONS_DIR: str = ""
     NER_OUTPUTS_DIR: str = ""
+    CHAT_DB_PATH: str = ""
 
     model_config = SettingsConfigDict(env_file='.env', env_file_encoding='utf-8', extra='ignore')
 
@@ -47,6 +48,8 @@ class Settings(BaseSettings):
             self.EXTRACTED_JSONS_DIR = os.path.join(self.BASE_DIR, "extracted_jsons")
         if not self.NER_OUTPUTS_DIR:
             self.NER_OUTPUTS_DIR = os.path.join(self.BASE_DIR, "ner_outputs")
+        if not self.CHAT_DB_PATH:
+            self.CHAT_DB_PATH = os.path.join(self.BASE_DIR, "data", "chat_history.db")
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
