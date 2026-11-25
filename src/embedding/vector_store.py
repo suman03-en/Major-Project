@@ -315,6 +315,7 @@ class QdrantVectorStore:
                     "hierarchy": payload.get("hierarchy", {}),
                     "text": payload.get("text", ""),
                     "stats": payload.get("stats", {}),
+                    "status": payload.get("status"),
                 }
             )
 
