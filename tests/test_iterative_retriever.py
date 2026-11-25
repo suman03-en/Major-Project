@@ -252,6 +252,40 @@ class TestIterativeRetriever(unittest.TestCase):
         self.assertEqual(res2.loops_used, 1)
         self.assertEqual([c["chunk_id"] for c in res2.chunks], ["c-1"])
 
+    def test_execute_actions_clamps_and_sanitizes_top_k(self) -> None:
+        recorded_top_ks: list[int] = []
+
+        class _RecordingVectorStore(_FakeVectorStore):
+            def search(self, **kwargs: Any) -> list[dict[str, Any]]:
+                recorded_top_ks.append(kwargs.get("top_k", -1))
+                return list(self._search_results)
+
+        rag = RAGPipeline(
+            embedder=_FakeEmbedder(),
+            vector_store=_RecordingVectorStore([], search_results=[_make_chunk("c-1", sec=3)]),
+            llm_client=_FakeLLMClient(),
+            use_graph=False,
+        )
+        retriever = IterativeRetriever(rag_pipeline=rag, max_loops=3, max_provisions=12)
+
+        # CONTEXT_OVERFETCH is 3, so vector_store.search receives top_k * 3
+        actions = [
+            {"tool": "search_clauses", "query": "q1", "top_k": 99},
+            {"tool": "search_clauses", "query": "q2", "top_k": -2},
+            {"tool": "search_clauses", "query": "q3", "top_k": "bad"},
+            {"tool": "search_clauses", "query": "q4", "top_k": None},
+        ]
+        retriever._execute_actions(
+            actions,
+            "default",
+            [],
+            lambda _: None,
+            lambda _: None,
+            lambda _s, _m: None,
+        )
+        # Clamped to 8, clamped to 1, fallback 6, fallback 6 (multiplied by CONTEXT_OVERFETCH=3)
+        self.assertEqual(recorded_top_ks, [24, 3, 18, 18])
+
 
 class TestLegalAgentIterativeWiring(unittest.TestCase):
     def test_legal_fact_and_procedural_without_graph_use_iterative_retriever(self) -> None:
@@ -271,7 +305,7 @@ class TestLegalAgentIterativeWiring(unittest.TestCase):
         agent = LegalAgent(rag_pipeline=rag, graph_store=None, llm_client=llm, translate_backoff_sec=0.0)
 
         events: list[tuple[str, str]] = []
-        resp = agent.respond("What types of companies can be registered?", on_step=lambda s, m: events.append((s, m)))
+        resp = agent.respond("What does section 3 say about company incorporation?", on_step=lambda s, m: events.append((s, m)))
         self.assertEqual(resp.intent, IntentType.LEGAL_FACT)
         self.assertEqual([c["chunk_id"] for c in resp.chunks], ["c-3", "c-166"])
         self.assertIn("Final grounded answer", resp.answer)
@@ -292,6 +326,56 @@ class TestLegalAgentIterativeWiring(unittest.TestCase):
         resp_proc = agent_proc.respond("How to register a company?")
         self.assertEqual([c["chunk_id"] for c in resp_proc.chunks], ["c-3"])
         self.assertIn("Procedural answer", resp_proc.answer)
+
+    def test_procedural_with_graph_combines_graph_and_vector_via_iterative_rag(self) -> None:
+        initial = [_make_chunk("c-3", sec=3, text="कम्पनी दर्ता सम्बन्धी दफा ३ को व्यवस्था।")]
+        graph_procs = [{"process_name": "Company Registration", "steps": [{"step_number": 1, "action": "Apply online"}]}]
+        llm = _FakeLLMClient([
+            '{"sufficient": true, "missing": "", "next_actions": []}',
+            "Combined graph and provision answer.",
+        ])
+        rag = RAGPipeline(
+            embedder=_FakeEmbedder(),
+            vector_store=_FakeVectorStore([], search_results=initial),
+            graph_store=_FakeGraphStore(graph_procs),
+            llm_client=llm,
+            use_graph=True,
+        )
+        agent = LegalAgent(
+            rag_pipeline=rag,
+            graph_store=_FakeGraphStore(graph_procs),
+            llm_client=llm,
+            translate_backoff_sec=0.0,
+        )
+        resp = agent.respond("How to register a company?")
+        self.assertEqual(resp.intent, IntentType.PROCEDURAL)
+        self.assertEqual([c["chunk_id"] for c in resp.chunks], ["c-3"])
+        self.assertEqual(len(resp.graph), 1)
+        self.assertIn("Combined graph and provision answer.", resp.answer)
+
+    def test_insufficient_retrieval_appends_gap_note_to_context_and_response(self) -> None:
+        initial = [_make_chunk("c-3", sec=3)]
+        llm = _FakeLLMClient([
+            '{"sufficient": false, "missing": "fee schedule in Rule 5", "next_actions": [{"tool": "search_clauses", "query": "fee schedule"}]}',
+            '{"sufficient": false, "missing": "fee schedule in Rule 5", "next_actions": []}',
+            "Partial answer based on Section 3.",
+        ])
+        rag = RAGPipeline(
+            embedder=_FakeEmbedder(),
+            vector_store=_FakeVectorStore([], search_results=initial),
+            llm_client=llm,
+            use_graph=False,
+        )
+        agent = LegalAgent(
+            rag_pipeline=rag,
+            graph_store=None,
+            llm_client=llm,
+            translate_backoff_sec=0.0,
+        )
+        resp = agent.respond("What is the registration fee?")
+        self.assertIn("fee schedule in Rule 5", resp.answer)
+        # Generation prompt (last LLM call) also received the gap note in context
+        self.assertIn("fee schedule in Rule 5", llm.calls[-1][1])
 
 
 if __name__ == "__main__":

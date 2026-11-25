@@ -182,6 +182,22 @@ class TestVerificationLayerCitations(unittest.TestCase):
         self.assertIn("Labor Act, 2074", res_bad.ungrounded_citations)
         self.assertIn("Verification Notice", res_bad.answer)
 
+    def test_act_grounding_rejects_empty_tokens_and_single_shared_generic_token(self) -> None:
+        verifier = VerificationLayer()
+        grounded = [({"company"}, "2063")]
+
+        # Empty normalized tokens (only generic word "ऐन" -> stripped to empty set) must return False
+        self.assertFalse(verifier._is_act_grounded("ऐन, २०६३", grounded))
+        # Multi-token cited act ("Private Company Act") must NOT match single-token grounded act ("company")
+        self.assertFalse(verifier._is_act_grounded("Private Company Act, 2063", grounded))
+        # Exact subset match (1 token <= 1 token) still succeeds
+        self.assertTrue(verifier._is_act_grounded("Companies Act, 2063", grounded))
+        # >= 2 overlapping tokens when cited has >= 2 tokens succeeds
+        grounded_multi = [({"foreign", "investment"}, "2075")]
+        self.assertTrue(
+            verifier._is_act_grounded("Foreign Investment and Technology Act, 2075", grounded_multi)
+        )
+
 
 class TestVerificationPipelineIntegration(unittest.TestCase):
     def test_rag_pipeline_verifies_with_zero_extra_llm_calls(self) -> None:
@@ -246,6 +262,59 @@ class TestVerificationPipelineIntegration(unittest.TestCase):
         self.assertIn("Verification Notice", resp.answer)
         self.assertIn("४०४", resp.answer)
         self.assertIn("verify", [s for s, _ in events])
+
+    def test_inactive_provisions_excluded_from_context_but_flagged_in_warning(self) -> None:
+        chunks = [
+            {
+                "chunk_id": "c-active",
+                "act_source": "company_act_2063",
+                "hierarchy": {"sec": 3},
+                "status": "active",
+                "text": "सक्रिय दफा ३ को पाठ।",
+            },
+            {
+                "chunk_id": "c-repealed",
+                "act_source": "company_act_2053",
+                "hierarchy": {"sec": 10},
+                "status": "repealed",
+                "text": "खारेज भएको दफा १० को पाठ।",
+            },
+        ]
+        llm_rag = _FakeLLMClient(["दफा ३ अनुसार कम्पनी स्थापना हुन्छ।"])
+        rag = RAGPipeline(
+            embedder=_FakeEmbedder(),
+            vector_store=_FakeVectorStore(chunks),
+            llm_client=llm_rag,
+            use_graph=False,
+        )
+        res = rag.answer("कम्पनी स्थापना")
+        # Context sent to LLM must exclude the repealed chunk text
+        self.assertIn("सक्रिय दफा ३ को पाठ", res["context"])
+        self.assertNotIn("खारेज भएको दफा १० को पाठ", res["context"])
+        # Temporal Warning must still flag the repealed provision
+        self.assertIn("Temporal Warning", res["answer"])
+        self.assertIn("repealed", res["answer"].lower())
+
+        # Same behavior in LegalAgent._run_iterative_rag()
+        llm_agent = _FakeLLMClient([
+            '{"sufficient": true, "missing": "", "next_actions": []}',
+            "दफा ३ अनुसार कम्पनी स्थापना हुन्छ।",
+        ])
+        rag_agent = RAGPipeline(
+            embedder=_FakeEmbedder(),
+            vector_store=_FakeVectorStore(chunks),
+            llm_client=llm_agent,
+            use_graph=False,
+        )
+        agent = LegalAgent(
+            rag_pipeline=rag_agent,
+            graph_store=None,
+            llm_client=llm_agent,
+            translate_backoff_sec=0.0,
+        )
+        resp = agent.respond("What does section 3 say?")
+        self.assertNotIn("खारेज भएको दफा १० को पाठ", llm_agent.calls[-1][1])
+        self.assertIn("Temporal Warning", resp.answer)
 
 
 if __name__ == "__main__":

@@ -276,7 +276,7 @@ class RAGPipeline:
         query: str,
         chunks: list[dict[str, Any]] | None = None,
     ) -> list[dict[str, Any]]:
-        """Search Neo4j procedural graph for workflows matching *query* and *chunks*."""
+        """Search Neo4j procedural graph for Procedures matching *query* and *chunks*."""
         return self.retrieve_graph_context(chunks or [], query)
 
     # ------------------------------------------------------------------
@@ -611,9 +611,10 @@ class RAGPipeline:
                     "context": "",
                 }
 
-        # 3. Assemble context
+        # 3. Exclude inactive provisions from context assembly (still verified below)
+        active_chunks = self.verifier.filter_active_provisions(chunks)
         context = self.assemble_context(
-            query, chunks, graph_context, response_language=response_language
+            query, active_chunks, graph_context, response_language=response_language
         )
 
         # 4. Generate answer
@@ -659,9 +660,10 @@ class RAGPipeline:
         if self.use_graph and self.graph_store:
             graph_context = self.retrieve_graph_context(chunks, search_query)
 
-        # 3. Assemble context
+        # 3. Exclude inactive provisions from context assembly (still verified below)
+        active_chunks = self.verifier.filter_active_provisions(chunks)
         context = self.assemble_context(
-            query, chunks, graph_context, response_language=response_language
+            query, active_chunks, graph_context, response_language=response_language
         )
 
         # Store for post-stream inspection

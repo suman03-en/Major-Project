@@ -114,6 +114,25 @@ class TestRegexFormatter(unittest.TestCase):
             self.assertLessEqual(len(c["text"]), 1200)
             self.assertTrue(c["text"].endswith("।"))
 
+    def test_oversized_ocr_block_without_danda_splits_on_whitespace(self):
+        words = ["कम्पनीदर्ताप्रक्रियासम्बन्धीविवरण"] * 80  # ~32 chars each -> > 2500 chars, no '।'
+        long_ocr_block = " ".join(words)
+        text = (
+            "परिच्छेद २\n"
+            "कम्पनी दर्ता\n"
+            "६. दर्ता सम्बन्धी व्यवस्थाः\n"
+            f"(१) {long_ocr_block}"
+        )
+        formatter = RegexFormatter(self.act_metadata, self.act_slug)
+        result = formatter.process_text(text)
+        sub_chunks = [c for c in result["chunks"] if c["type"] == "subsection"]
+
+        self.assertGreaterEqual(len(sub_chunks), 2)
+        ids = [c["id"] for c in sub_chunks]
+        self.assertEqual(len(ids), len(set(ids)))
+        for c in sub_chunks:
+            self.assertLessEqual(len(c["text"]), 1200)
+
     def test_parent_id_and_temporal_metadata_on_provisions(self):
         text = (
             "परिच्छेद २\n"

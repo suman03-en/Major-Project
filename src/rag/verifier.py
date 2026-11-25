@@ -240,11 +240,12 @@ class VerificationLayer:
         """Return True if *cited_act* matches any retrieved Act."""
         cited_tokens, cited_year = _normalize_act_tokens(cited_act)
         if not cited_tokens:
-            return True
+            return False
         for g_tokens, g_year in grounded_acts:
             if cited_year and g_year and cited_year != g_year:
                 continue
-            if cited_tokens & g_tokens:
+            overlap = cited_tokens & g_tokens
+            if cited_tokens <= g_tokens or (len(cited_tokens) >= 2 and len(overlap) >= 2):
                 return True
         return False
 
