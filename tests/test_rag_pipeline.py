@@ -413,6 +413,65 @@ class TestRAGPipelineSeams(unittest.TestCase):
         rag2.assemble_context("कम्पनी", tight_chunks, [])
         self.assertEqual(scroll_calls, 0)
 
+    def test_assemble_context_includes_bounded_conversation_history(self) -> None:
+        from src.rag.rag_pipeline import estimate_tokens
+
+        rag = RAGPipeline(
+            embedder=FakeEmbedder(),  # type: ignore[arg-type]
+            vector_store=FakeVectorStore([]),  # type: ignore[arg-type]
+            llm_client=FakeLLMClient(),
+            use_graph=False,
+            max_context_tokens=400,
+        )
+        history = [
+            {"role": "user", "content": "पहिलो पुरानो प्रश्न " * 20},
+            {"role": "assistant", "content": "पहिलो पुरानो जवाफ " * 20},
+            {"role": "user", "content": "दफा ४३ के भन्छ?"},
+            {"role": "assistant", "content": "दफा ४३ मा कम्पनी दर्ता व्यवस्था छ।"},
+        ]
+        ctx = rag.assemble_context(
+            "त्यसको दस्तुर कति हो?",
+            [],
+            [],
+            conversation_history=history,
+        )
+        self.assertIn("दफा ४३ मा कम्पनी दर्ता व्यवस्था छ।", ctx)
+        self.assertLessEqual(estimate_tokens(ctx), 420)
+
+    def test_format_citations_deduplicates_and_formats_readable_labels(self) -> None:
+        from src.rag.rag_pipeline import RAG_SYSTEM_PROMPT
+
+        self.assertIn("inline", RAG_SYSTEM_PROMPT.lower())
+        self.assertNotIn('end with a "स्रोत"', RAG_SYSTEM_PROMPT)
+
+        rag = RAGPipeline(
+            embedder=FakeEmbedder(),  # type: ignore[arg-type]
+            vector_store=FakeVectorStore([]),  # type: ignore[arg-type]
+            llm_client=FakeLLMClient(),
+            use_graph=False,
+        )
+        chunks = [
+            {
+                "chunk_id": "c1",
+                "act_source": "company_act_2063",
+                "hierarchy": {"sec": 3, "sub": 1},
+                "text": "कम्पनी संस्थापना सम्बन्धी व्यवस्था।",
+                "status": "active",
+            },
+            {
+                "chunk_id": "c1-dup",
+                "act_source": "company_act_2063",
+                "hierarchy": {"sec": 3, "sub": 1},
+                "text": "कम्पनी संस्थापना सम्बन्धी व्यवस्था।",
+                "status": "active",
+            },
+        ]
+        citations = rag.format_citations(chunks)
+        self.assertEqual(len(citations), 1)
+        self.assertIn("दफा 3", citations[0]["label"])
+        self.assertEqual(citations[0]["status"], "active")
+        self.assertIn("कम्पनी संस्थापना", citations[0]["excerpt"])
+
 
 if __name__ == "__main__":
     unittest.main()

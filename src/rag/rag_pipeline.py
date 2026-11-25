@@ -95,9 +95,9 @@ Answer ONLY from the provided Legal Provisions and Procedural Steps; do not use 
 
 RULES:
 1. Synthesis: Combine scattered Provisions (दफा/उपदफा) and Procedural Steps into a clear, actionable answer. If context only partially covers the question, answer what is supported with exact citations and note remaining gaps. Only state "उपलब्ध सन्दर्भमा यस प्रश्नको पर्याप्त जानकारी छैन।" when no relevant Provisions or Procedures exist.
-2. Citations (CRITICAL): Each Provision has a "📌 उद्धृत गर्नुहोस्" label. Cite ONLY that exact label—never infer section/subsection numbers from cross-references inside the text body (e.g., "उपदफा (४) बमोजिम").
+2. Inline Citations (CRITICAL): Each Provision has a "📌 उद्धृत गर्नुहोस्" label. Cite ONLY that exact label inline right where the claim appears (e.g., "(कम्पनी ऐन, २०६३, दफा ३(१))")—never infer section/subsection numbers from cross-references inside the text body (e.g., "उपदफा (४) बमोजिम").
 3. Procedures & Details: Use numbered steps and include required documents (आवश्यक कागजातहरू), offices (सम्बन्धित कार्यालय), fees (दस्तुर/शुल्क), and time limits (समय सीमा).
-4. Language & Format: Reply concisely in the user's question language (Nepali or English), organized by process/act with bold key terms/offices/deadlines, and end with a "स्रोत" (Source) section listing referenced acts."""
+4. Language & Format: Reply concisely in the user's question language (Nepali or English), organized by process/act with bold key terms/offices/deadlines. Do NOT append a "स्रोत" or "Sources" list at the end—keep all citations inline."""
 
 
 class RAGPipeline:
@@ -505,6 +505,29 @@ class RAGPipeline:
             lines.append(f"  सम्बन्धित कार्यालयहरू: {', '.join(missing_offices)}")
         return "\n".join(lines)
 
+    def format_citations(self, chunks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Deduplicate retrieved Provisions and format readable citation metadata for UI pills."""
+        formatted: list[dict[str, Any]] = []
+        seen: set[tuple[Any, Any, Any, Any]] = set()
+        for chunk in chunks:
+            act = str(chunk.get("act_source", "") or "Unknown")
+            h = chunk.get("hierarchy") or {}
+            key = (act, h.get("sec"), h.get("sub"), h.get("clause"))
+            if key in seen:
+                continue
+            seen.add(key)
+            excerpt = " ".join(str(chunk.get("text", "")).split())[:280]
+            formatted.append(
+                {
+                    "label": self._format_citation(act, h),
+                    "act_source": act,
+                    "hierarchy": self._format_hierarchy(h),
+                    "excerpt": excerpt,
+                    "status": str(chunk.get("status", "active") or "active"),
+                }
+            )
+        return formatted
+
     def _pack_primary_provisions(
         self,
         provisions: list[dict[str, Any]],
@@ -623,18 +646,49 @@ class RAGPipeline:
             used_total += block_cost
         return out
 
+    def _pack_history(
+        self,
+        conversation_history: list[dict[str, str]],
+        hist_header: str,
+        hist_budget: int,
+    ) -> tuple[list[str], int]:
+        """Pack newest-first conversation turns within *hist_budget*, keeping chronological order."""
+        if not conversation_history or hist_budget <= 0:
+            return [], 0
+        header_cost = estimate_tokens(hist_header)
+        if header_cost >= hist_budget:
+            return [], 0
+        used = header_cost
+        kept_reversed: list[str] = []
+        for turn in reversed(conversation_history[-4:]):
+            role = "User" if turn.get("role") == "user" else "Assistant"
+            text = " ".join(str(turn.get("content", "")).split())[:300]
+            if not text:
+                continue
+            line = f"- {role}: {text}"
+            cost = estimate_tokens(line)
+            if used + cost > hist_budget:
+                break
+            kept_reversed.append(line)
+            used += cost
+        if not kept_reversed:
+            return [], 0
+        return [hist_header, *reversed(kept_reversed)], used
+
     def assemble_context(
         self,
         query: str,
         chunks: list[dict[str, Any]],
         graph_context: list[dict[str, Any]],
         response_language: str | None = None,
+        conversation_history: list[dict[str, str]] | None = None,
     ) -> str:
         """
         Build a token-budgeted context string for the LLM.
 
         Packs directly retrieved Provisions and Procedures first within
-        ``max_context_tokens``, then appends Section siblings only while spare
+        ``max_context_tokens``, optionally includes a bounded sliding window of
+        recent conversation turns, and appends Section siblings only while spare
         budget remains (capped at ``max_siblings_per_section`` per Section).
         """
         lang_hint = ""
@@ -645,14 +699,23 @@ class RAGPipeline:
         footer = f"\n\n═══ प्रश्न (Question) ═══\n{query}{lang_hint}"
         budget = max(0, self.max_context_tokens - estimate_tokens(footer))
 
+        hist_header = "\n═══ अघिल्लो संवाद (Recent Conversation) ═══"
+        hist_lines: list[str] = []
+        hist_reserve = 0
+        if conversation_history and budget > 0:
+            hist_lines, hist_reserve = self._pack_history(
+                conversation_history, hist_header, budget // 4
+            )
+
+        content_budget = max(0, budget - hist_reserve)
         proc_blocks = [self._format_procedure_block(proc) for proc in graph_context]
         proc_header = "\n═══ प्रक्रियागत चरणहरू (Procedural Steps from Knowledge Graph) ═══\n"
         proc_reserve = 0
-        if proc_blocks and budget > 0:
+        if proc_blocks and content_budget > 0:
             total_proc_tokens = estimate_tokens(proc_header + "\n\n".join(proc_blocks))
-            proc_reserve = min(total_proc_tokens, budget // 2)
+            proc_reserve = min(total_proc_tokens, content_budget // 2)
 
-        prov_budget = max(0, budget - proc_reserve)
+        prov_budget = max(0, content_budget - proc_reserve)
         prov_header = "═══ कानूनी पाठ सन्दर्भहरू (Legal Text Context) ═══\n"
         packed_provisions, primary_provisions, seen_ids, used_prov_tokens = (
             self._pack_primary_provisions(chunks, prov_budget, estimate_tokens(prov_header))
@@ -669,7 +732,12 @@ class RAGPipeline:
             used_total = used_prov_tokens
 
         if proc_blocks:
-            sections.extend(self._pack_procedures(proc_blocks, proc_header, budget, used_total))
+            sections.extend(
+                self._pack_procedures(proc_blocks, proc_header, content_budget, used_total)
+            )
+
+        if hist_lines:
+            sections.extend(hist_lines)
 
         context_text = "\n".join(sections)
         return f"{context_text}{footer}"
