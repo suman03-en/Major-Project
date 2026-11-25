@@ -18,9 +18,9 @@ Usage:
     reranked = reranker.rerank(query="कम्पनी दर्ता", candidates=results, top_k=5)
 """
 
-import os
 import logging
-from typing import Dict, Any, List, Optional
+import os
+from typing import Any
 
 # Suppress noisy HuggingFace Hub logs during model download.
 os.environ.setdefault("HF_HUB_VERBOSITY", "error")
@@ -43,8 +43,8 @@ class CrossEncoderReranker:
     def __init__(
         self,
         model_name: str = DEFAULT_RERANKER_MODEL,
-        device: Optional[str] = None,
-        use_fp16: Optional[bool] = None,
+        device: str | None = None,
+        use_fp16: bool | None = None,
         max_length: int = MAX_LENGTH,
     ) -> None:
         """
@@ -65,7 +65,7 @@ class CrossEncoderReranker:
             logger.info("Reranker auto-detected device: %s", device)
 
         if use_fp16 is None:
-            use_fp16 = True if device == "cuda" else False
+            use_fp16 = device == "cuda"
 
         self._device = torch.device(device)
         self._max_length = max_length
@@ -95,9 +95,9 @@ class CrossEncoderReranker:
     def compute_scores(
         self,
         query: str,
-        texts: List[str],
+        texts: list[str],
         normalize: bool = True,
-    ) -> List[float]:
+    ) -> list[float]:
         """
         Compute cross-encoder relevance scores for (query, text) pairs.
 
@@ -137,10 +137,10 @@ class CrossEncoderReranker:
     def rerank(
         self,
         query: str,
-        candidates: List[Dict[str, Any]],
+        candidates: list[dict[str, Any]],
         top_k: int = 5,
         normalize: bool = True,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Re-rank retrieval candidates using cross-encoder scores.
 
@@ -175,7 +175,7 @@ class CrossEncoderReranker:
         scores = self.compute_scores(query, texts, normalize=normalize)
 
         # Attach scores and sort by cross-encoder relevance.
-        reranked: List[Dict[str, Any]] = []
+        reranked: list[dict[str, Any]] = []
         for candidate, ce_score in zip(candidates, scores):
             entry = dict(candidate)  # Shallow copy to avoid mutating input.
             entry["rerank_score"] = ce_score

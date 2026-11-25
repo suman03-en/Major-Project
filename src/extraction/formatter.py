@@ -1,7 +1,7 @@
 import re
-import json
 
-from src.utils import nepali_to_int, NEPALI_DIGITS, ENGLISH_DIGITS
+from src.utils import nepali_to_int
+
 
 def extract_references(text, slug_prefix):
     """
@@ -88,20 +88,20 @@ class RegexFormatter:
             provisos = []
             explanations = []
 
-            # Split provisos (तर …) — handles multiple provisos in one clause
-            proviso_parts = re.split(r'(?<=।)\s*तर\s+', text)
-            if len(proviso_parts) > 1:
-                text = proviso_parts[0].strip()
-                for part in proviso_parts[1:]:
-                    provisos.append('तर ' + part.strip())
-
-            # Split explanations (स्पष्टीकरणः …) — same multi-capture approach
+            # Split explanations (स्पष्टीकरणः …) first so they aren't swallowed into trailing provisos
             explanation_parts = re.split(r'स्पष्टीकरणः\s*', text)
             if len(explanation_parts) > 1:
                 text = explanation_parts[0].strip()
                 for part in explanation_parts[1:]:
                     if part.strip():
                         explanations.append('स्पष्टीकरणः ' + part.strip())
+
+            # Split provisos (तर …) — handles multiple provisos in one clause
+            proviso_parts = re.split(r'(?<=।)\s*तर\s+', text)
+            if len(proviso_parts) > 1:
+                text = proviso_parts[0].strip()
+                for part in proviso_parts[1:]:
+                    provisos.append('तर ' + part.strip())
 
             chunk_type = 'section'
             if self.current_sub is not None:
@@ -172,8 +172,7 @@ class RegexFormatter:
                     continue
 
                 # Original act markers
-                if (line.startswith('प्रस्तावना') or line.startswith('परिच्छेद')
-                        or 'संक्षिप्त नाम' in line):
+                if (line.startswith(('प्रस्तावना', 'परिच्छेद')) or 'संक्षिप्त नाम' in line):
                     in_front_matter = False
                 # Gazette / notification markers (scanned image PDFs)
                 elif line in ('सूचना', 'आदेश', 'निर्देशिका', 'विज्ञप्ति',
@@ -184,13 +183,8 @@ class RegexFormatter:
 
                 # Numbered section or subsection at the start means content has begun
                 elif not seen_amendment_header and (                    # CHANGED: added "not seen_amendment_header and"
-                    re.match(r'^[०-९\d]+\.', line) or re.match(r'^\([०-९\d]+\)', line)):
+                    re.match(r'^[०-९\d]+\.', line) or re.match(r'^\([०-९\d]+\)', line)) or non_empty_count > 20:
                         in_front_matter = False
-                        
-                # Safety fallback: if no marker found in first 20 non-empty lines,
-                # assume there is no front matter and process everything.
-                elif non_empty_count > 20:
-                    in_front_matter = False
                 else:
                     continue
                 

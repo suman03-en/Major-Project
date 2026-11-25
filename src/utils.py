@@ -5,7 +5,6 @@ Contains common helpers used across extraction, embedding, and knowledge_base mo
 """
 
 import re
-from typing import Optional
 
 # Nepali ↔ English digit translation table
 NEPALI_DIGITS = '०१२३४५६७८९'
@@ -13,7 +12,7 @@ ENGLISH_DIGITS = '0123456789'
 _TRANS_TABLE = str.maketrans(NEPALI_DIGITS, ENGLISH_DIGITS)
 
 
-def nepali_to_int(text: str) -> Optional[int]:
+def nepali_to_int(text: str) -> int | None:
     """
     Convert a Nepali numeral string to an integer.
 
@@ -31,17 +30,18 @@ def nepali_to_int(text: str) -> Optional[int]:
 
 def get_ollama_installed_models(host: str) -> list[str]:
     """Retrieve list of installed model names from local Ollama server."""
-    import urllib.request
     import json
-    
+    import urllib.error
+    import urllib.request
+
     try:
         req = urllib.request.Request(f"{host}/api/tags", method="GET")
         with urllib.request.urlopen(req, timeout=1.5) as resp:
             if resp.status == 200:
                 data = json.loads(resp.read().decode("utf-8"))
                 return [m.get("name", "") for m in data.get("models", [])]
-    except Exception:
-        pass
+    except (urllib.error.URLError, json.JSONDecodeError, OSError):
+        return []
     return []
 
 def is_ollama_available(host: str) -> bool:

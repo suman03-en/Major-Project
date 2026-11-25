@@ -1,13 +1,12 @@
-import os
-
-
 import glob
 import json
+import os
 import re
-from src.extraction.extractor import PdfExtractor
-from src.extraction.cleaner import TextCleaner
-from src.extraction.formatter import RegexFormatter
+
 from src.config import get_settings
+from src.extraction.cleaner import TextCleaner
+from src.extraction.extractor import PdfExtractor
+from src.extraction.formatter import RegexFormatter
 
 
 def extract_metadata_from_text(front_matter_text):

@@ -9,21 +9,22 @@ Usage:
     python src/ingest.py --recreate           # Drop & recreate collection first
 """
 
-import sys
-import os
-
+import argparse
 import glob
+import hashlib
 import json
 import logging
-import argparse
+import os
+import sys
 from pathlib import Path
+
+from src.config import get_settings, setup_logging
 
 # ---------------------------------------------------------------------------
 # Project imports
 # ---------------------------------------------------------------------------
 from src.embedding.embedder import LegalChunkEmbedder
 from src.embedding.vector_store import QdrantVectorStore
-from src.config import get_settings, setup_logging
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -39,11 +40,35 @@ EXTRACTED_JSONS_DIR = _settings.EXTRACTED_JSONS_DIR
 QDRANT_URL = _settings.QDRANT_URL
 
 
-def load_datasets(directory: str) -> list[tuple[str, dict]]:
+def _file_sha256(filepath: str) -> str:
+    """Compute SHA-256 hex digest of a file for ingestion idempotency."""
+    h = hashlib.sha256()
+    with open(filepath, "rb") as fh:
+        for block in iter(lambda: fh.read(65536), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def _load_manifest(manifest_path: Path) -> dict[str, str]:
+    if manifest_path.exists():
+        try:
+            with open(manifest_path, "r", encoding="utf-8") as fh:
+                return json.load(fh)
+        except (OSError, json.JSONDecodeError):
+            return {}
+    return {}
+
+
+def _save_manifest(manifest_path: Path, manifest: dict[str, str]) -> None:
+    with open(manifest_path, "w", encoding="utf-8") as fh:
+        json.dump(manifest, fh, indent=2, ensure_ascii=False)
+
+
+def load_datasets(directory: str) -> list[tuple[str, str, str, dict]]:
     """
     Load all ``*_dataset.json`` files from *directory*.
 
-    Returns a list of ``(act_source_name, dataset_dict)`` tuples.
+    Returns a list of ``(act_source_name, filepath, file_hash, dataset_dict)`` tuples.
     """
     pattern = os.path.join(directory, "*_dataset.json")
     files = sorted(glob.glob(pattern))
@@ -52,14 +77,15 @@ def load_datasets(directory: str) -> list[tuple[str, dict]]:
         logger.warning("No *_dataset.json files found in %s", directory)
         return []
 
-    datasets: list[tuple[str, dict]] = []
+    datasets: list[tuple[str, str, str, dict]] = []
     for filepath in files:
         act_source = Path(filepath).stem  # e.g. "comapy_act_dataset"
+        file_hash = _file_sha256(filepath)
         with open(filepath, "r", encoding="utf-8") as fh:
             data = json.load(fh)
         chunk_count = len(data.get("chunks", []))
         logger.info("Loaded %-35s  (%d chunks)", act_source, chunk_count)
-        datasets.append((act_source, data))
+        datasets.append((act_source, filepath, file_hash, data))
 
     return datasets
 
@@ -74,6 +100,11 @@ def main() -> None:
         help="Drop and recreate the Qdrant collection before ingesting.",
     )
     parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Re-embed and upsert all datasets even if unchanged.",
+    )
+    parser.add_argument(
         "--qdrant-url",
         default=QDRANT_URL,
         help="Qdrant server URL (default: %(default)s).",
@@ -86,33 +117,58 @@ def main() -> None:
         logger.error("Nothing to ingest. Place *_dataset.json files in %s/", EXTRACTED_JSONS_DIR)
         sys.exit(1)
 
+    manifest_path = Path(EXTRACTED_JSONS_DIR) / ".ingest_manifest.json"
+    manifest = {} if args.recreate else _load_manifest(manifest_path)
+
+    # Filter out unchanged datasets unless --recreate or --force is set
+    pending = []
+    for act_source, filepath, file_hash, dataset in datasets:
+        if not args.force and not args.recreate and manifest.get(act_source) == file_hash:
+            logger.info("Skipping unchanged '%s' (hash match). Use --force to re-ingest.", act_source)
+            continue
+        pending.append((act_source, filepath, file_hash, dataset))
+
     # ── 2. Initialize embedder & vector store ───────────────────────────
-    embedder = LegalChunkEmbedder()
     store = QdrantVectorStore(url=args.qdrant_url)
 
     if args.recreate:
         try:
             store.delete_collection()
             logger.info("Existing collection dropped.")
-        except Exception:
-            pass  # Collection may not exist yet.
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Collection delete skipped: %s", exc)
 
     store.ensure_collection()
 
+    if not pending:
+        logger.info("All datasets are up to date. Nothing to ingest.")
+        return
+
+    embedder = LegalChunkEmbedder()
+
     # ── 3. Embed & upsert each dataset ──────────────────────────────────
     total_points = 0
-    for act_source, dataset in datasets:
+    for act_source, filepath, file_hash, dataset in pending:
         chunks = dataset.get("chunks", [])
         if not chunks:
             logger.warning("Skipping '%s' – no chunks.", act_source)
             continue
 
         logger.info("Embedding %d chunks from '%s'...", len(chunks), act_source)
-        points = embedder.embed_chunks(chunks, act_source=act_source)
+        texts = embedder.build_embedding_texts(chunks)
+        embeddings = embedder.embed_texts(texts)
 
-        logger.info("Upserting %d points into Qdrant...", len(points))
-        store.upsert_points(points)
-        total_points += len(points)
+        logger.info("Upserting %d points into Qdrant...", len(chunks))
+        upserted = store.upsert_chunks(
+            chunks=chunks,
+            dense_vecs=embeddings["dense_vecs"],
+            sparse_vecs=embeddings["lexical_weights"],
+            act_source=act_source,
+        )
+        total_points += upserted
+        manifest[act_source] = file_hash
+
+    _save_manifest(manifest_path, manifest)
 
     # ── 4. Summary ──────────────────────────────────────────────────────
     info = store.get_collection_info()

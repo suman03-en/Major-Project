@@ -16,8 +16,9 @@ the Dockerfile / compose.yaml:
 """
 
 import logging
-import torch
+
 import fitz
+import torch
 from PIL import Image
 
 logger = logging.getLogger(__name__)
@@ -70,10 +71,14 @@ class PdfExtractor:
 
         from surya.model.detection.model import (
             load_model as load_det_model,
+        )
+        from surya.model.detection.model import (
             load_processor as load_det_processor,
         )
         from surya.model.recognition.model import load_model as load_rec_model
-        from surya.model.recognition.processor import load_processor as load_rec_processor
+        from surya.model.recognition.processor import (
+            load_processor as load_rec_processor,
+        )
 
         self._det_processor = load_det_processor()
         self._det_model = load_det_model()
@@ -98,7 +103,19 @@ class PdfExtractor:
             self._stats["total"] += 1
             self._stats["ocr"] += 1
 
-            text = self._ocr_page(page)
+            try:
+                text = self._ocr_page(page)
+            except RuntimeError as exc:
+                logger.warning(
+                    "OCR failed on page %d (%s): %s. Skipping page.",
+                    page_num + 1,
+                    self.pdf_path,
+                    exc,
+                )
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                text = ""
+
             yield page_num + 1, text
 
         logger.info(
@@ -163,5 +180,5 @@ class PdfExtractor:
                 self._det_model = None
                 torch.cuda.empty_cache()
                 logger.info("Cleared Surya OCR models from VRAM.")
-            except Exception as e:
+            except (RuntimeError, AttributeError) as e:
                 logger.debug("VRAM cleanup error (non-fatal): %s", e)

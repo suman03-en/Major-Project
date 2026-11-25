@@ -15,7 +15,8 @@ Usage:
 """
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any
+
 from neo4j import GraphDatabase, Transaction
 
 logger = logging.getLogger(__name__)
@@ -42,7 +43,7 @@ class Neo4jGraphStore:
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.close()
 
-    def run_cypher(self, query: str, parameters: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    def run_cypher(self, query: str, parameters: dict[str, Any] | None = None) -> list[dict[str, Any]]:
         """Run arbitrary Cypher query and return results as list of dicts."""
         parameters = parameters or {}
         with self.driver.session() as session:
@@ -70,7 +71,7 @@ class Neo4jGraphStore:
             session.run(query)
         logger.info("Neo4j graph cleared.")
 
-    def ingest_ner_result(self, ner_data: Dict[str, Any]) -> None:
+    def ingest_ner_result(self, ner_data: dict[str, Any]) -> None:
         """Ingest a full NER result JSON (NERPipelineResult schema) into Neo4j."""
         act_title = ner_data.get("act_title", "Unknown Act")
         act_slug = ner_data.get("act_slug", "unknown_act")
@@ -222,7 +223,7 @@ class Neo4jGraphStore:
         
         logger.info("Ingested NER results for act '%s'", act_title)
 
-    def get_graph_stats(self) -> Dict[str, Any]:
+    def get_graph_stats(self) -> dict[str, Any]:
         """Return counts of different node and relationship types."""
         node_query = "MATCH (n) RETURN labels(n)[0] AS name, count(*) AS count"
         nodes = self.run_cypher(node_query)
@@ -235,13 +236,13 @@ class Neo4jGraphStore:
             "relationships": [r for r in rels if r["name"] is not None]
         }
 
-    def get_all_processes(self) -> List[str]:
+    def get_all_processes(self) -> list[str]:
         """Return list of all process names."""
         query = "MATCH (p:Process) RETURN p.name AS name ORDER BY name"
         results = self.run_cypher(query)
         return [r["name"] for r in results if r["name"]]
 
-    def get_steps_for_process(self, process_name: str) -> List[Dict[str, Any]]:
+    def get_steps_for_process(self, process_name: str) -> list[dict[str, Any]]:
         """Return ordered steps for a given process."""
         query = """
         MATCH (p:Process {name: $process_name})-[:HAS_STEP]->(s:Step)
@@ -260,7 +261,7 @@ class Neo4jGraphStore:
         """
         return self.run_cypher(query, {"process_name": process_name})
 
-    def get_documents_for_process(self, process_name: str) -> List[str]:
+    def get_documents_for_process(self, process_name: str) -> list[str]:
         """Return all unique documents required across a whole process."""
         query = """
         MATCH (:Process {name: $process_name})-[:HAS_STEP]->(:Step)-[:REQUIRES_DOCUMENT]->(d:Document)
@@ -270,7 +271,7 @@ class Neo4jGraphStore:
         results = self.run_cypher(query, {"process_name": process_name})
         return [r["document"] for r in results if r["document"]]
 
-    def get_offices_for_process(self, process_name: str) -> List[str]:
+    def get_offices_for_process(self, process_name: str) -> list[str]:
         """Return all unique offices involved in a whole process."""
         query = """
         MATCH (:Process {name: $process_name})-[:HAS_STEP]->(:Step)-[:PERFORMED_AT]->(o:Office)
@@ -279,3 +280,42 @@ class Neo4jGraphStore:
         """
         results = self.run_cypher(query, {"process_name": process_name})
         return [r["office"] for r in results if r["office"]]
+
+    def find_relevant_processes(
+        self,
+        query: str,
+        chunks: list[dict[str, Any]],
+        max_processes: int = 3,
+    ) -> list[dict[str, Any]]:
+        """
+        Match Neo4j processes against the user query and retrieved chunks,
+        returning full step, document, and office details.
+        """
+        all_processes = self.get_all_processes()
+        if not all_processes:
+            return []
+
+        search_text = query.lower()
+        for chunk in chunks:
+            search_text += " " + chunk.get("text", "").lower()
+
+        matching_processes: list[str] = [
+            name for name in all_processes if name.lower() in search_text
+        ]
+
+        if not matching_processes:
+            query_words = {w for w in query.split() if len(w) > 2}
+            for name in all_processes:
+                if query_words & set(name.split()):
+                    matching_processes.append(name)
+
+        graph_results: list[dict[str, Any]] = []
+        for process_name in matching_processes[:max_processes]:
+            graph_results.append({
+                "process_name": process_name,
+                "steps": self.get_steps_for_process(process_name),
+                "documents": self.get_documents_for_process(process_name),
+                "offices": self.get_offices_for_process(process_name),
+            })
+
+        return graph_results

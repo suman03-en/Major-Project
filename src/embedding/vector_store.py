@@ -14,21 +14,22 @@ Usage:
 """
 
 import logging
-from typing import Any, Dict, List, Optional
+import uuid
+from typing import Any
 
 from qdrant_client import QdrantClient
 from qdrant_client.models import (
     Distance,
     FieldCondition,
     Filter,
+    Fusion,
+    FusionQuery,
     MatchValue,
     PointStruct,
-    VectorParams,
-    SparseVectorParams,
-    SparseVector,
     Prefetch,
-    FusionQuery,
-    Fusion,
+    SparseVector,
+    SparseVectorParams,
+    VectorParams,
 )
 
 logger = logging.getLogger(__name__)
@@ -54,7 +55,9 @@ class QdrantVectorStore:
         self.url = url
         self.collection_name = collection_name
         self.vector_dim = vector_dim
-        self.client = QdrantClient(url=url)
+        self.client = (
+            QdrantClient(location=":memory:") if url == ":memory:" else QdrantClient(url=url)
+        )
         logger.info("Connected to Qdrant at %s", url)
 
     # ------------------------------------------------------------------
@@ -102,7 +105,7 @@ class QdrantVectorStore:
     # Upsert
     # ------------------------------------------------------------------
 
-    def upsert_points(self, points: List[Dict[str, Any]]) -> int:
+    def upsert_points(self, points: list[dict[str, Any]]) -> int:
         """
         Batch-upsert Qdrant-ready point dicts containing dense and sparse vecs.
 
@@ -124,7 +127,7 @@ class QdrantVectorStore:
             for p in batch:
                 # Convert the sparse dict {token_id: weight} to indices and values
                 # Token IDs in BGEM3 are stringified integers, we must convert to int
-                sparse_indices = [int(k) for k in p["sparse"].keys()]
+                sparse_indices = [int(k) for k in p["sparse"]]
                 sparse_values = list(p["sparse"].values())
                 
                 # In Qdrant, if you have both default dense and named sparse,
@@ -160,19 +163,60 @@ class QdrantVectorStore:
         )
         return total
 
+    def upsert_chunks(
+        self,
+        chunks: list[dict[str, Any]],
+        dense_vecs: Any,
+        sparse_vecs: list[dict[str, float]],
+        act_source: str,
+    ) -> int:
+        """
+        Build Qdrant points from raw legal chunks and precomputed embeddings,
+        then batch-upsert them into the collection.
+        """
+        if not chunks:
+            return 0
+
+        points: list[dict[str, Any]] = []
+        for chunk, dense_vec, sparse_vec in zip(chunks, dense_vecs, sparse_vecs):
+            point_id = str(uuid.uuid5(uuid.NAMESPACE_URL, chunk["id"]))
+            payload: dict[str, Any] = {
+                "chunk_id": chunk["id"],
+                "type": chunk.get("type", ""),
+                "hierarchy": chunk.get("hierarchy", {}),
+                "text": chunk["text"],
+                "act_source": act_source,
+                "stats": chunk.get("stats", {}),
+            }
+            for optional_key in ("provisos", "explanations", "refs"):
+                if optional_key in chunk:
+                    payload[optional_key] = chunk[optional_key]
+
+            vector_list = dense_vec.tolist() if hasattr(dense_vec, "tolist") else list(dense_vec)
+            points.append(
+                {
+                    "point_id": point_id,
+                    "vector": vector_list,
+                    "sparse": sparse_vec,
+                    "payload": payload,
+                }
+            )
+
+        return self.upsert_points(points)
+
     # ------------------------------------------------------------------
     # Search
     # ------------------------------------------------------------------
 
     def search(
         self,
-        query_dense: List[float],
-        query_sparse: Dict[str, float],
+        query_dense: list[float],
+        query_sparse: dict[str, float],
         search_type: str = "hybrid",
         top_k: int = 5,
-        act_filter: Optional[str] = None,
-        score_threshold: Optional[float] = None,
-    ) -> List[Dict[str, Any]]:
+        act_filter: str | None = None,
+        score_threshold: float | None = None,
+    ) -> list[dict[str, Any]]:
         """
         Retrieve the ``top_k`` nearest chunks using Dense, Sparse, or Hybrid search.
 
@@ -208,7 +252,7 @@ class QdrantVectorStore:
                 ]
             )
 
-        sparse_indices = [int(k) for k in query_sparse.keys()]
+        sparse_indices = [int(k) for k in query_sparse]
         sparse_values = list(query_sparse.values())
         sparse_vec = SparseVector(indices=sparse_indices, values=sparse_values)
 
@@ -259,7 +303,7 @@ class QdrantVectorStore:
         else:
             raise ValueError(f"Unknown search_type: {search_type}")
 
-        results: List[Dict[str, Any]] = []
+        results: list[dict[str, Any]] = []
         for hit in hits:
             payload = hit.payload or {}
             results.append(
@@ -280,7 +324,7 @@ class QdrantVectorStore:
     # Diagnostics
     # ------------------------------------------------------------------
 
-    def get_collection_info(self) -> Dict[str, Any]:
+    def get_collection_info(self) -> dict[str, Any]:
         """Return point count and collection status."""
         info = self.client.get_collection(self.collection_name)
         return {

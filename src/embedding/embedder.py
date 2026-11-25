@@ -12,16 +12,15 @@ Usage:
     vectors  = embedder.embed_chunks(chunks, act_source="company_act")
 """
 
-import os
 import logging
+import os
 import uuid
-from typing import List, Dict, Any, Optional
+from typing import Any
 
 # Suppress noisy HuggingFace Hub logs during model download.
 os.environ.setdefault("HF_HUB_VERBOSITY", "error")
 
 from FlagEmbedding import BGEM3FlagModel
-import numpy as np
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +37,7 @@ class LegalChunkEmbedder:
     def __init__(
         self,
         model_name: str = DEFAULT_MODEL_NAME,
-        device: Optional[str] = None,
+        device: str | None = None,
         batch_size: int = 32,
         show_progress: bool = True,
     ) -> None:
@@ -58,7 +57,7 @@ class LegalChunkEmbedder:
         if device is None:
             import torch
             device = "cuda" if torch.cuda.is_available() else "cpu"
-            use_fp16 = True if device == "cuda" else False
+        use_fp16 = device == "cuda"
         self.model = BGEM3FlagModel(model_name, use_fp16=use_fp16, device=device)
         self.batch_size = batch_size
         self.show_progress = show_progress
@@ -73,7 +72,7 @@ class LegalChunkEmbedder:
     # Public API
     # ------------------------------------------------------------------
 
-    def embed_texts(self, texts: List[str]) -> Dict[str, Any]:
+    def embed_texts(self, texts: list[str]) -> dict[str, Any]:
         """
         Encode a list of raw text strings into dense and sparse vectors.
 
@@ -93,7 +92,7 @@ class LegalChunkEmbedder:
         return embeddings
 
     @staticmethod
-    def _build_embedding_text(chunk: Dict[str, Any]) -> str:
+    def _build_embedding_text(chunk: dict[str, Any]) -> str:
         """
         Compose the **whole chunk** into a single embedding string by
         combining every available field:
@@ -112,7 +111,7 @@ class LegalChunkEmbedder:
         raw ``chunk["text"]`` for display purposes.
         """
         hierarchy = chunk.get("hierarchy", {})
-        sections: List[str] = []
+        sections: list[str] = []
 
         # ── Hierarchy labels ────────────────────────────────────────
         if "ch_title" in hierarchy:
@@ -128,20 +127,22 @@ class LegalChunkEmbedder:
         sections.append(chunk["text"])
 
         # ── Provisos (तर …) ────────────────────────────────────────
-        for proviso in chunk.get("provisos", []):
-            sections.append(proviso)
+        sections.extend(chunk.get("provisos", []))
 
         # ── Explanations (स्पष्टीकरण …) ────────────────────────────
-        for explanation in chunk.get("explanations", []):
-            sections.append(explanation)
+        sections.extend(chunk.get("explanations", []))
 
         return " | ".join(sections)
 
+    def build_embedding_texts(self, chunks: list[dict[str, Any]]) -> list[str]:
+        """Compose context-enriched embedding strings for a list of chunks."""
+        return [self._build_embedding_text(chunk) for chunk in chunks]
+
     def embed_chunks(
         self,
-        chunks: List[Dict[str, Any]],
+        chunks: list[dict[str, Any]],
         act_source: str,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Embed pipeline JSON chunks and return Qdrant-ready point dicts.
 
@@ -174,13 +175,13 @@ class LegalChunkEmbedder:
         dense_vecs = embeddings["dense_vecs"]
         sparse_vecs = embeddings["lexical_weights"]
 
-        points: List[Dict[str, Any]] = []
+        points: list[dict[str, Any]] = []
         for chunk, dense_vec, sparse_vec in zip(chunks, dense_vecs, sparse_vecs):
             # Deterministic UUID so re-ingesting the same chunk overwrites
             # rather than duplicating.
             point_id = str(uuid.uuid5(uuid.NAMESPACE_URL, chunk["id"]))
 
-            payload: Dict[str, Any] = {
+            payload: dict[str, Any] = {
                 "chunk_id": chunk["id"],
                 "type": chunk.get("type", ""),
                 "hierarchy": chunk.get("hierarchy", {}),

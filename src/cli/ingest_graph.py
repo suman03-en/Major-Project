@@ -9,19 +9,20 @@ Usage:
     python -m src.cli.ingest_graph --input path/to.json # Ingest specific file
 """
 
-import sys
-import os
+import argparse
 import glob
 import json
 import logging
-import argparse
+import os
+import sys
 from pathlib import Path
+
+from src.config import get_settings, setup_logging
 
 # ---------------------------------------------------------------------------
 # Project imports
 # ---------------------------------------------------------------------------
 from src.knowledge_base.graph_store import Neo4jGraphStore
-from src.config import get_settings, setup_logging
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -41,7 +42,7 @@ _settings = get_settings()
 NER_OUTPUTS_DIR = _settings.NER_OUTPUTS_DIR
 
 
-def load_datasets(directory: str, specific_input: str = None) -> list[tuple[str, dict]]:
+def load_datasets(directory: str, specific_input: str | None = None) -> list[tuple[str, dict]]:
     """Load JSON files to ingest."""
     if specific_input:
         files = [specific_input]
@@ -66,7 +67,7 @@ def load_datasets(directory: str, specific_input: str = None) -> list[tuple[str,
                 datasets.append((act_source, data))
             else:
                 logger.warning("Skipping %s: no 'entities' key found", act_source)
-        except Exception as e:
+        except (OSError, json.JSONDecodeError) as e:
             logger.error("Failed to load %s: %s", filepath, e)
 
     return datasets
@@ -121,7 +122,7 @@ def main() -> None:
                 print(f"  {rel['name']:<15}: {rel['count']}")
             print("=" * 60 + "\n")
 
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.error("Graph operations failed: %s", e)
         sys.exit(1)
 

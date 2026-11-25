@@ -20,14 +20,16 @@ Usage:
 """
 
 import logging
-from typing import Any, Dict, Iterator, List, Optional
+from collections.abc import Callable, Iterator
+from typing import Any
 
-from src.config import get_settings, setup_logging
+from src.config import get_settings
 from src.embedding.embedder import LegalChunkEmbedder
-from src.embedding.vector_store import QdrantVectorStore
 from src.embedding.reranker import CrossEncoderReranker
+from src.embedding.vector_store import QdrantVectorStore
 from src.knowledge_base.graph_store import Neo4jGraphStore
-from src.llm.llm_client import MistralLLMClient
+from src.llm.base import BaseLLMClient
+from src.llm.llm_client import create_llm_client
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +39,7 @@ logger = logging.getLogger(__name__)
 RERANK_FETCH_MULTIPLIER: int = 4
 CONTEXT_OVERFETCH: int = 3       # Over-fetch to compensate for empty/short chunks
 MIN_CHUNK_TEXT_LEN: int = 10     # Skip chunks shorter than this
+RELEVANCE_THRESHOLD: float = 0.08  # Min reranker score when no graph steps match
 
 # ---------------------------------------------------------------------------
 # RAG System Prompt
@@ -51,8 +54,10 @@ Your job is to answer the user's question using ONLY the context provided below.
 RULES
 ═══════════════════════════════════════════
 1. Answer ONLY from the provided context. Do NOT use outside knowledge.
-2. If the context does not contain enough information to answer, clearly state:
-   "उपलब्ध सन्दर्भमा यस प्रश्नको पर्याप्त जानकारी छैन।" (The available context does not have sufficient information for this question.)
+2. SYNTHESIS RULE (IMPORTANT):
+   - Legal acts rarely state a complete "how-to" guide in one single paragraph; instead, steps, eligibility, required documents, offices, and fees are spread across multiple sections (दफा/उपदफा) and procedural nodes.
+   - Combine and synthesize all relevant details from the provided chunks and graph steps into a clear, actionable answer.
+   - Only state "उपलब्ध सन्दर्भमा यस प्रश्नको पर्याप्त जानकारी छैन।" if the provided context truly contains no relevant provisions or steps for the question.
 3. CITATION RULE (CRITICAL):
    - Each context chunk has a "📌 उद्धृत गर्नुहोस्" (Cite As) label.
    - You MUST use ONLY that label when citing sources.
@@ -91,7 +96,7 @@ class RAGPipeline:
         Pre-initialised Qdrant store. Created automatically if ``None``.
     graph_store : Neo4jGraphStore | None
         Pre-initialised Neo4j store. Set ``use_graph=False`` to skip.
-    llm_client : MistralLLMClient | None
+    llm_client : BaseLLMClient | None
         Pre-initialised LLM client. Created automatically if ``None``.
     reranker : CrossEncoderReranker | None
         Pre-initialised cross-encoder reranker. Disabled by default.
@@ -107,11 +112,11 @@ class RAGPipeline:
 
     def __init__(
         self,
-        embedder: Optional[LegalChunkEmbedder] = None,
-        vector_store: Optional[QdrantVectorStore] = None,
-        graph_store: Optional[Neo4jGraphStore] = None,
-        llm_client: Optional[MistralLLMClient] = None,
-        reranker: Optional[CrossEncoderReranker] = None,
+        embedder: LegalChunkEmbedder | None = None,
+        vector_store: QdrantVectorStore | None = None,
+        graph_store: Neo4jGraphStore | None = None,
+        llm_client: BaseLLMClient | None = None,
+        reranker: CrossEncoderReranker | None = None,
         use_graph: bool = True,
         use_reranker: bool = False,
         top_k: int = 5,
@@ -144,7 +149,7 @@ class RAGPipeline:
 
         # --- Graph store ---
         self.use_graph = use_graph
-        self.graph_store: Optional[Neo4jGraphStore] = None
+        self.graph_store: Neo4jGraphStore | None = None
         if use_graph:
             if graph_store is not None:
                 self.graph_store = graph_store
@@ -154,7 +159,7 @@ class RAGPipeline:
                         settings.NEO4J_URI, settings.NEO4J_USER, settings.NEO4J_PASSWORD
                     )
                     logger.info("Connected to Neo4j graph store.")
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001
                     logger.warning(
                         "Could not connect to Neo4j (%s). "
                         "RAG will work without graph context.", e
@@ -165,7 +170,7 @@ class RAGPipeline:
         if llm_client is not None:
             self.llm_client = llm_client
         else:
-            self.llm_client = MistralLLMClient()
+            self.llm_client = create_llm_client()
 
         self.top_k = top_k
         self.search_type = search_type
@@ -177,9 +182,9 @@ class RAGPipeline:
     def retrieve_chunks(
         self,
         query: str,
-        top_k: Optional[int] = None,
-        act_filter: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
+        top_k: int | None = None,
+        act_filter: str | None = None,
+    ) -> list[dict[str, Any]]:
         """
         Encode the query and retrieve the most relevant chunks from Qdrant.
         Filters empty/stub chunks and optionally applies cross-encoder reranking.
@@ -227,9 +232,9 @@ class RAGPipeline:
 
     def retrieve_graph_context(
         self,
-        chunks: List[Dict[str, Any]],
+        chunks: list[dict[str, Any]],
         query: str,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Query Neo4j for procedural steps related to the retrieved chunks.
 
@@ -240,54 +245,16 @@ class RAGPipeline:
             return []
 
         try:
-            # Get all process names from the graph
-            all_processes = self.graph_store.get_all_processes()
-            if not all_processes:
-                return []
-
-            # Find processes that are mentioned in the query or chunk text
-            matching_processes: List[str] = []
-            search_text = query.lower()
-            for chunk in chunks:
-                search_text += " " + chunk.get("text", "").lower()
-
-            for process_name in all_processes:
-                # Check if any part of the process name appears in the context
-                if process_name.lower() in search_text:
-                    matching_processes.append(process_name)
-
-            # If no exact matches, try partial keyword matching
-            if not matching_processes:
-                query_words = set(query.split())
-                for process_name in all_processes:
-                    process_words = set(process_name.split())
-                    # If at least one significant word overlaps (skip very short words)
-                    overlap = query_words & process_words
-                    significant_overlap = [w for w in overlap if len(w) > 2]
-                    if significant_overlap:
-                        matching_processes.append(process_name)
-
-            # Fetch full step details for matching processes
-            graph_results: List[Dict[str, Any]] = []
-            for process_name in matching_processes[:3]:  # Cap at 3 to avoid context overflow
-                steps = self.graph_store.get_steps_for_process(process_name)
-                docs = self.graph_store.get_documents_for_process(process_name)
-                offices = self.graph_store.get_offices_for_process(process_name)
-
-                graph_results.append({
-                    "process_name": process_name,
-                    "steps": steps,
-                    "documents": docs,
-                    "offices": offices,
-                })
-
+            graph_results = self.graph_store.find_relevant_processes(
+                query=query, chunks=chunks
+            )
             logger.info(
                 "Graph context: %d matching processes found for query.",
                 len(graph_results),
             )
             return graph_results
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.warning("Graph retrieval failed: %s", e)
             return []
 
@@ -328,9 +295,9 @@ class RAGPipeline:
 
     def _fetch_section_siblings(
         self,
-        chunk: Dict[str, Any],
+        chunk: dict[str, Any],
         seen_ids: set,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Fetch sibling chunks from Qdrant that share the same act + chapter +
         section as the given chunk. This pulls in ALL clauses/subsections
@@ -338,7 +305,7 @@ class RAGPipeline:
 
         Uses Qdrant scroll with payload filtering — no embedding needed.
         """
-        from qdrant_client.models import Filter, FieldCondition, MatchValue
+        from qdrant_client.models import FieldCondition, Filter, MatchValue
 
         h = chunk.get("hierarchy", {})
         act = chunk.get("act_source", "")
@@ -383,15 +350,16 @@ class RAGPipeline:
                 })
             return siblings
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.warning("Sibling fetch failed: %s", e)
             return []
 
     def assemble_context(
         self,
         query: str,
-        chunks: List[Dict[str, Any]],
-        graph_context: List[Dict[str, Any]],
+        chunks: list[dict[str, Any]],
+        graph_context: list[dict[str, Any]],
+        response_language: str | None = None,
     ) -> str:
         """
         Build the full context string that gets sent to the LLM along with
@@ -401,10 +369,10 @@ class RAGPipeline:
         same section are fetched from Qdrant to give the LLM full context
         (e.g., all penalty tiers when one clause is retrieved).
         """
-        sections: List[str] = []
+        sections: list[str] = []
 
         # Collect all sibling chunks to provide parent/sibling context
-        expanded_chunks: List[Dict[str, Any]] = []
+        expanded_chunks: list[dict[str, Any]] = []
         seen_ids: set = set()
         expanded_sections: set = set()  # Track (act, ch, sec) already expanded
 
@@ -499,7 +467,12 @@ class RAGPipeline:
 
         # ── Final assembly ───────────────────────────────────────────
         context_text = "\n".join(sections)
-        return f"{context_text}\n\n═══ प्रश्न (Question) ═══\n{query}"
+        lang_hint = ""
+        if response_language == "en":
+            lang_hint = "\n[Instruction: Respond in English.]"
+        elif response_language == "roman":
+            lang_hint = "\n[Instruction: Respond in clear Romanized Nepali (or English if technical legal terms are clearer).]"
+        return f"{context_text}\n\n═══ प्रश्न (Question) ═══\n{query}{lang_hint}"
 
     # ------------------------------------------------------------------
     # Stage 4: Generate answer
@@ -508,11 +481,28 @@ class RAGPipeline:
     def answer(
         self,
         query: str,
-        top_k: Optional[int] = None,
-        act_filter: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        top_k: int | None = None,
+        act_filter: str | None = None,
+        retrieval_query: str | None = None,
+        response_language: str | None = None,
+        on_step: Callable[[str, str], None] | None = None,
+    ) -> dict[str, Any]:
         """
         Run the full RAG pipeline and return the generated answer with metadata.
+
+        Parameters
+        ----------
+        query:
+            Original user question (used in the LLM prompt so the response
+            matches the user's language).
+        retrieval_query:
+            Optional normalized/translated query (e.g. Devanagari Nepali) used
+            for Qdrant + Neo4j retrieval.  Defaults to *query*.
+        response_language:
+            Optional hint (``"ne"``, ``"en"``, ``"roman"``) appended to the
+            prompt when *query* was translated.
+        on_step:
+            Optional ``(stage, message)`` callback for live progress updates.
 
         Returns
         -------
@@ -522,18 +512,55 @@ class RAGPipeline:
             ``graph``    : list — graph-derived procedural steps
             ``context``  : str — the full assembled context sent to the LLM
         """
-        # 1. Retrieve chunks
-        chunks = self.retrieve_chunks(query, top_k=top_k, act_filter=act_filter)
+        def _emit(stage: str, msg: str) -> None:
+            if on_step:
+                on_step(stage, msg)
 
-        # 2. Retrieve graph context
+        search_query = retrieval_query or query
+
+        # 1. Retrieve chunks
+        _emit("retrieve_vector", "Searching legal clauses in Qdrant…")
+        chunks = self.retrieve_chunks(search_query, top_k=top_k, act_filter=act_filter)
+        _emit("retrieve_vector_done", f"Retrieved {len(chunks)} relevant legal chunk(s)")
+
+        # 2. Retrieve graph context before gating so procedural graph matches
+        #    are never discarded just because vector chunks scored modestly.
         graph_context = []
         if self.use_graph and self.graph_store:
-            graph_context = self.retrieve_graph_context(chunks, query)
+            _emit("retrieve_graph", "Checking Neo4j knowledge graph for procedures…")
+            graph_context = self.retrieve_graph_context(chunks, search_query)
+            _emit("retrieve_graph_done", f"Found {len(graph_context)} matching procedure(s)")
+
+        # 2b. Relevance gate — only short-circuit when BOTH vector reranker score
+        #     is below threshold AND no graph procedures matched.
+        if self.reranker and chunks and not graph_context:
+            top_score = chunks[0].get("score", 1.0)
+            if top_score < RELEVANCE_THRESHOLD:
+                logger.info(
+                    "Relevance gate: top score %.3f < %.3f and no graph match — skipping context for query: %s",
+                    top_score,
+                    RELEVANCE_THRESHOLD,
+                    query[:60],
+                )
+                no_ctx_response = (
+                    "उपलब्ध कानूनी सन्दर्भमा यस प्रश्नको पर्याप्त जानकारी फेला परेन।"
+                    if response_language == "ne"
+                    else "I could not find sufficient relevant information in the available Nepali legal documents for this question."
+                )
+                return {
+                    "answer": no_ctx_response,
+                    "chunks": [],
+                    "graph": [],
+                    "context": "",
+                }
 
         # 3. Assemble context
-        context = self.assemble_context(query, chunks, graph_context)
+        context = self.assemble_context(
+            query, chunks, graph_context, response_language=response_language
+        )
 
         # 4. Generate answer
+        _emit("generate", "Generating grounded legal answer…")
         response = self.llm_client.generate(RAG_SYSTEM_PROMPT, context)
 
         return {
@@ -546,8 +573,10 @@ class RAGPipeline:
     def answer_stream(
         self,
         query: str,
-        top_k: Optional[int] = None,
-        act_filter: Optional[str] = None,
+        top_k: int | None = None,
+        act_filter: str | None = None,
+        retrieval_query: str | None = None,
+        response_language: str | None = None,
     ) -> Iterator[str]:
         """
         Run the full RAG pipeline and stream the generated answer token-by-token.
@@ -556,16 +585,20 @@ class RAGPipeline:
         Callers can access the retrieval context via ``last_retrieval_context``
         after initiating the stream.
         """
+        search_query = retrieval_query or query
+
         # 1. Retrieve chunks
-        chunks = self.retrieve_chunks(query, top_k=top_k, act_filter=act_filter)
+        chunks = self.retrieve_chunks(search_query, top_k=top_k, act_filter=act_filter)
 
         # 2. Retrieve graph context
         graph_context = []
         if self.use_graph and self.graph_store:
-            graph_context = self.retrieve_graph_context(chunks, query)
+            graph_context = self.retrieve_graph_context(chunks, search_query)
 
         # 3. Assemble context
-        context = self.assemble_context(query, chunks, graph_context)
+        context = self.assemble_context(
+            query, chunks, graph_context, response_language=response_language
+        )
 
         # Store for post-stream inspection
         self.last_retrieval_context = {
@@ -586,5 +619,5 @@ class RAGPipeline:
         if self.graph_store:
             try:
                 self.graph_store.close()
-            except Exception:
-                pass
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("Graph store close failed: %s", exc)

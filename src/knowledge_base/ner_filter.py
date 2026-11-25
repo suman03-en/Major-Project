@@ -13,8 +13,6 @@ This reduces unnecessary LLM calls by ~60-70%.
 """
 
 import re
-from typing import List, Dict, Tuple
-
 
 # Nepali keywords that indicate a clause is likely process-related.
 # Grouped by entity category for scoring.
@@ -111,7 +109,7 @@ class ClauseFilter:
         """Check if the text contains at least one procedural/actionable verb."""
         return bool(self._verb_pattern.search(text))
 
-    def score_chunk(self, chunk: dict) -> Tuple[int, Dict[str, List[str]]]:
+    def score_chunk(self, chunk: dict) -> tuple[int, dict[str, list[str]]]:
         """
         Score a single chunk for NER relevance.
         
@@ -152,7 +150,7 @@ class ClauseFilter:
         
         return score, matched_groups
 
-    def filter_chunks(self, chunks: List[dict]) -> List[dict]:
+    def filter_chunks(self, chunks: list[dict]) -> list[dict]:
         """
         Filter a list of chunks, returning only those that pass
         the relevance threshold.
@@ -172,7 +170,7 @@ class ClauseFilter:
                 filtered.append(annotated)
         return filtered
 
-    def get_stats(self, chunks: List[dict]) -> dict:
+    def get_stats(self, chunks: list[dict]) -> dict:
         """Return filtering statistics for logging/debugging."""
         total = len(chunks)
         filtered = self.filter_chunks(chunks)

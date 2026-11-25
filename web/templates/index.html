@@ -216,6 +216,69 @@
             font-size: 0.85rem;
             color: var(--text-muted);
         }
+
+        .thinking-box {
+            background: rgba(15, 23, 42, 0.55);
+            border: 1px solid var(--border);
+            border-radius: 0.5rem;
+            padding: 0.55rem 0.85rem;
+            margin-bottom: 0.75rem;
+            font-size: 0.88rem;
+            color: var(--text-muted);
+        }
+
+        .thinking-box summary {
+            cursor: pointer;
+            font-weight: 500;
+            color: var(--accent);
+            user-select: none;
+            list-style: none;
+            display: flex;
+            align-items: center;
+            gap: 0.45rem;
+        }
+
+        .thinking-box summary::-webkit-details-marker {
+            display: none;
+        }
+
+        .thinking-steps {
+            list-style: none;
+            margin: 0.5rem 0 0.15rem 0;
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 0.35rem;
+        }
+
+        .thinking-step {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            line-height: 1.35;
+        }
+
+        .thinking-step.active {
+            color: var(--text-main);
+        }
+
+        .thinking-step.done {
+            color: var(--text-muted);
+        }
+
+        .step-spinner {
+            width: 11px;
+            height: 11px;
+            border: 2px solid var(--border);
+            border-top-color: var(--accent);
+            border-radius: 50%;
+            animation: spin 0.75s linear infinite;
+            flex-shrink: 0;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
     </style>
     <!-- Marked.js for Markdown parsing -->
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
@@ -244,6 +307,13 @@
         const queryInput = document.getElementById('queryInput');
         const sendBtn = document.getElementById('sendBtn');
 
+        // Persist session_id across turns in the browser tab
+        let sessionId = sessionStorage.getItem('legal_agent_session_id');
+        if (!sessionId) {
+            sessionId = (crypto.randomUUID && crypto.randomUUID()) || String(Date.now());
+            sessionStorage.setItem('legal_agent_session_id', sessionId);
+        }
+
         function appendMessage(sender, text, isHtml = false) {
             const msgDiv = document.createElement('div');
             msgDiv.className = `message ${sender}`;
@@ -257,73 +327,141 @@
             return msgDiv;
         }
 
-        function showLoading() {
-            const loaderDiv = document.createElement('div');
-            loaderDiv.className = 'message bot';
-            loaderDiv.id = 'loadingIndicator';
-            loaderDiv.innerHTML = `
-                <div class="loading">
-                    उत्तर खोज्दै... (Retrieving contexts and generating answer)
-                    <div class="dot"></div>
-                    <div class="dot"></div>
-                    <div class="dot"></div>
-                </div>
+        function createThinkingBubble() {
+            const msgDiv = document.createElement('div');
+            msgDiv.className = 'message bot';
+            msgDiv.innerHTML = `
+                <details class="thinking-box" open>
+                    <summary>
+                        <span class="step-spinner"></span>
+                        <span class="thinking-title">सोच्दैछु... (Thinking)</span>
+                    </summary>
+                    <ul class="thinking-steps"></ul>
+                </details>
+                <div class="answer-body"></div>
             `;
-            chatHistory.appendChild(loaderDiv);
+            chatHistory.appendChild(msgDiv);
+            chatHistory.scrollTop = chatHistory.scrollHeight;
+            return msgDiv;
+        }
+
+        function addThinkingStep(msgDiv, message) {
+            const list = msgDiv.querySelector('.thinking-steps');
+            const prev = list.querySelector('.thinking-step.active');
+            if (prev) {
+                prev.classList.remove('active');
+                prev.classList.add('done');
+                const icon = prev.querySelector('.step-icon');
+                if (icon) icon.outerHTML = '<span class="step-icon">✓</span>';
+            }
+            const li = document.createElement('li');
+            li.className = 'thinking-step active';
+            li.innerHTML = `<span class="step-icon step-spinner"></span><span></span>`;
+            li.querySelector('span:last-child').textContent = message;
+            list.appendChild(li);
             chatHistory.scrollTop = chatHistory.scrollHeight;
         }
 
-        function hideLoading() {
-            const loader = document.getElementById('loadingIndicator');
-            if (loader) loader.remove();
+        function finalizeThinkingBox(msgDiv) {
+            const details = msgDiv.querySelector('.thinking-box');
+            const list = msgDiv.querySelector('.thinking-steps');
+            const stepsCount = list.children.length;
+            const prev = list.querySelector('.thinking-step.active');
+            if (prev) {
+                prev.classList.remove('active');
+                prev.classList.add('done');
+                const icon = prev.querySelector('.step-icon');
+                if (icon) icon.outerHTML = '<span class="step-icon">✓</span>';
+            }
+            if (stepsCount === 0) {
+                details.remove();
+                return;
+            }
+            const summary = details.querySelector('summary');
+            summary.innerHTML = `<span>▸ प्रक्रिया (${stepsCount} steps)</span>`;
+            details.open = false;
+        }
+
+        function renderFinalAnswer(msgDiv, data) {
+            if (data.session_id) {
+                sessionId = data.session_id;
+                sessionStorage.setItem('legal_agent_session_id', sessionId);
+            }
+            finalizeThinkingBox(msgDiv);
+
+            let htmlAnswer = marked.parse(data.answer || '');
+            if (data.chunks && data.chunks.length > 0) {
+                htmlAnswer += `<div class="citations"><strong>सन्दर्भ स्रोतहरू:</strong><ul>`;
+                data.chunks.forEach((c, idx) => {
+                    const hierarchy = c.hierarchy || {};
+                    const act = c.act_source || "कम्पनी ऐन";
+                    let cite = act;
+                    if (hierarchy.sec) cite += `, दफा ${hierarchy.sec}`;
+                    htmlAnswer += `<li>[${idx + 1}] ${cite}</li>`;
+                });
+                htmlAnswer += `</ul></div>`;
+            }
+
+            msgDiv.querySelector('.answer-body').innerHTML = htmlAnswer;
+            chatHistory.scrollTop = chatHistory.scrollHeight;
         }
 
         async function sendQuery() {
             const query = queryInput.value.trim();
             if (!query) return;
 
-            // UI Updates
             appendMessage('user', query);
             queryInput.value = '';
             queryInput.disabled = true;
             sendBtn.disabled = true;
-            showLoading();
+
+            const botBubble = createThinkingBubble();
 
             try {
-                const response = await fetch('/query', {
+                const response = await fetch('/query/stream', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ query: query, top_k: 5 })
+                    body: JSON.stringify({ query: query, session_id: sessionId, top_k: 5 })
                 });
 
-                if (!response.ok) {
+                if (!response.ok || !response.body) {
                     throw new Error(`HTTP error! status: ${response.status}`);
                 }
 
-                const data = await response.json();
-                hideLoading();
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
 
-                // Format the answer using marked.js to render Markdown properly
-                let htmlAnswer = marked.parse(data.answer);
-                
-                // Add citations if available
-                if (data.chunks && data.chunks.length > 0) {
-                    htmlAnswer += `<div class="citations"><strong>सन्दर्भ स्रोतहरू:</strong><ul>`;
-                    data.chunks.forEach((c, idx) => {
-                        let hierarchy = c.hierarchy;
-                        let act = c.act_source || "कम्पनी ऐन";
-                        let cite = act;
-                        if(hierarchy.sec) cite += `, दफा ${hierarchy.sec}`;
-                        htmlAnswer += `<li>[${idx+1}] ${cite}</li>`;
-                    });
-                    htmlAnswer += `</ul></div>`;
+                while (true) {
+                    const { value, done } = await reader.read();
+                    if (done) break;
+                    buffer += decoder.decode(value, { stream: true });
+
+                    const events = buffer.split('\n\n');
+                    buffer = events.pop() || '';
+
+                    for (const rawEvent of events) {
+                        let eventName = 'message';
+                        let dataStr = '';
+                        for (const line of rawEvent.split('\n')) {
+                            if (line.startsWith('event: ')) eventName = line.slice(7).trim();
+                            else if (line.startsWith('data: ')) dataStr += line.slice(6);
+                        }
+                        if (!dataStr) continue;
+                        const payload = JSON.parse(dataStr);
+                        if (eventName === 'step') {
+                            addThinkingStep(botBubble, payload.message);
+                        } else if (eventName === 'final') {
+                            renderFinalAnswer(botBubble, payload);
+                        } else if (eventName === 'error') {
+                            throw new Error(payload.detail || 'Unknown server error');
+                        }
+                    }
                 }
-
-                appendMessage('bot', htmlAnswer, true);
-
             } catch (error) {
-                hideLoading();
-                appendMessage('bot', `त्रुटि (Error): ${error.message}\nPlease make sure the RAG pipeline is fully initialized.`);
+                finalizeThinkingBox(botBubble);
+                botBubble.querySelector('.answer-body').textContent =
+                    `त्रुटि (Error): ${error.message}\nPlease make sure the RAG pipeline is fully initialized.`;
             } finally {
                 queryInput.disabled = false;
                 sendBtn.disabled = false;

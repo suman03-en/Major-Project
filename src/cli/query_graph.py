@@ -8,17 +8,17 @@ Usage:
     python -m src.cli.query_graph --query "processes"  # One-shot command
 """
 
-import sys
-import logging
 import argparse
 import json
-from typing import Optional
+import logging
+import sys
+
+from src.config import get_settings, setup_logging
 
 # ---------------------------------------------------------------------------
 # Project imports
 # ---------------------------------------------------------------------------
 from src.knowledge_base.graph_store import Neo4jGraphStore
-from src.config import get_settings, setup_logging
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -125,7 +125,7 @@ def run_command(store: Neo4jGraphStore, cmd_text: str) -> None:
             for record in res:
                 print(json.dumps(record, ensure_ascii=False, indent=2))
             print()
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             print(f"\nCypher Error: {e}\n")
     else:
         print("\nInvalid command or missing arguments.")
@@ -176,7 +176,7 @@ def main() -> None:
 
     try:
         store = Neo4jGraphStore(settings.NEO4J_URI, settings.NEO4J_USER, settings.NEO4J_PASSWORD)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         print(f"\nFailed to connect to Neo4j at {settings.NEO4J_URI}: {e}\n")
         sys.exit(1)
 

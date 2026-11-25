@@ -10,20 +10,18 @@ Usage:
     python src/evaluation/evaluate_bge_m3.py
 """
 
+import collections
 import json
-import os
 import sys
 import time
-import collections
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
 
 import numpy as np
 import torch
-from tqdm import tqdm
 from FlagEmbedding import BGEM3FlagModel
+from tqdm import tqdm
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
-
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -54,7 +52,7 @@ def detect_device():
         device = "cpu"
         use_fp16 = False
         batch_size = 4
-        print(f"  No GPU detected. Running on CPU.")
+        print("  No GPU detected. Running on CPU.")
         print(f"  Using FP16: {use_fp16}, Batch size: {batch_size}")
 
     return {
@@ -301,7 +299,7 @@ def main():
     print(f"  Query count: {len(query_ids)} queries")
 
     # --- Load Embedding Model ---
-    print(f"\n[3/7] Loading BGE-M3 embedding model...")
+    print("\n[3/7] Loading BGE-M3 embedding model...")
     model = BGEM3FlagModel(EMBEDDING_MODEL_NAME, use_fp16=hw_config["use_fp16"])
 
     # --- Encode ---
@@ -384,7 +382,7 @@ def main():
     # ====================================================================
     reranker_metrics = None
     if SKIP_RERANKER:
-        print(f"\n  → Reranker SKIPPED (SKIP_RERANKER=True). Set to False to enable.")
+        print("\n  → Reranker SKIPPED (SKIP_RERANKER=True). Set to False to enable.")
     else:
         print(f"\n  → Loading and running Reranker (top-{RERANKER_TOP_N} from Hybrid)...")
         t_start = time.time()
@@ -414,7 +412,7 @@ def main():
     # ====================================================================
     # Final Report & Save
     # ====================================================================
-    print(f"\n[6/6] Generating report...")
+    print("\n[6/6] Generating report...")
 
     results_data = {
         "dense": dense_metrics,
