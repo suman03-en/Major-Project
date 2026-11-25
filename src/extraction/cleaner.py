@@ -1,4 +1,24 @@
 import re
+import unicodedata
+
+# Curated Nepali legal OCR confusion-pair fix map (zero-LLM deterministic cleanup)
+NEPALI_LEGAL_OCR_FIXES: dict[str, str] = {
+    "भुन्नाले": "भन्नाले",
+    "कम्त्रीमा": "कम्तीमा",
+    "पनिछ": "पर्नेछ",
+    "कम्पर्नी": "कम्पनी",
+    "प्रचेलित": "प्रचलित",
+    "सम्झन् पर्छ": "सम्झनु पर्छ",
+    "सम्झन्पर्छ": "सम्झनुपर्छ",
+    "गर्न् पर्छ": "गर्नु पर्छ",
+    "हुन् पर्छ": "हुनु पर्छ",
+    "सक्नेछन": "सक्नेछन्",
+    "भएमा बाहेक": "भएमा बाहेक",
+}
+
+_OCR_FIX_PATTERN = re.compile(
+    "|".join(re.escape(k) for k in sorted(NEPALI_LEGAL_OCR_FIXES, key=len, reverse=True))
+)
 
 
 class TextCleaner:
@@ -7,10 +27,14 @@ class TextCleaner:
         Cleans the raw extracted text by removing unwanted artifacts like
         headers, footers, page numbers, garbage Unicode, and excessive whitespace.
 
+        Applies Unicode NFC normalization and a curated Nepali legal OCR
+        confusion-pair dictionary with zero LLM calls.
         Handles both OCR output and native PDF text extraction artifacts.
         """
         if not text:
             return ""
+
+        text = unicodedata.normalize("NFC", text)
 
         # ── Garbage Unicode Cleanup ──────────────────────────────────────
         # Remove Private Use Area characters (U+E000–U+F8FF) — common in
@@ -59,5 +83,8 @@ class TextCleaner:
 
         # Replace 3 or more newlines with double newlines
         text = re.sub(r"\n{3,}", "\n\n", text)
+
+        # Apply curated Nepali legal OCR confusion-pair fixes (zero-LLM)
+        text = _OCR_FIX_PATTERN.sub(lambda m: NEPALI_LEGAL_OCR_FIXES[m.group(0)], text)
 
         return text.strip()
