@@ -166,6 +166,30 @@ class TestProcedureFormatter(unittest.TestCase):
         self.assertEqual(result["chunks"], [])
         self.assertEqual(result["ner_result"]["entities"], [])
 
+    def test_parses_pipe_delimited_citizen_charter_table(self) -> None:
+        text = (
+            "| सेवाको नाम | आवश्यक कागजात | लाग्ने शुल्क | लाग्ने समय | प्रक्रिया |\n"
+            "| --- | --- | --- | --- | --- |\n"
+            "| प्राइभेट कम्पनी दर्ता | नागरिकता, प्रबन्धपत्र | रु. १,०००/- | ३ कार्यदिन | १. अनलाइन निवेदन दिने; २. प्रमाणपत्र लिने |\n"
+            "| प्यान दर्ता | नागरिकता, दर्ता प्रमाणपत्र | निःशुल्क | सोही दिन | १. करदाता पोर्टलमा फाराम भर्ने |\n"
+        )
+        formatter = ProcedureFormatter(act_metadata={"title": "नागरिक बडापत्र"}, act_slug="table_charter")
+        result = formatter.process_text(text)
+
+        self.assertEqual(len(result["procedures"]), 2)
+        p1 = result["procedures"][0]
+        self.assertEqual(p1["process_name"], "प्राइभेट कम्पनी दर्ता")
+        self.assertEqual(p1["documents_required"], ["नागरिकता", "प्रबन्धपत्र"])
+        self.assertEqual(p1["price_fees"][0]["amount_npr"], 1000)
+        self.assertEqual(p1["duration"], "३ कार्यदिन")
+        self.assertEqual(len(p1["steps"]), 2)
+
+        p2 = result["procedures"][1]
+        self.assertEqual(p2["process_name"], "प्यान दर्ता")
+        self.assertEqual(p2["price_fees"][0]["amount_npr"], 0)
+        self.assertEqual(p2["duration"], "सोही दिन")
+        self.assertEqual(len(p2["steps"]), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

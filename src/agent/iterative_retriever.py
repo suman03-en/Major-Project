@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _MAX_ACTIONS_PER_LOOP: int = 2
-_MAX_SNIPPET_CHARS: int = 280
+_MAX_PROVISION_PREVIEW_CHARS: int = 280
 
 _COMPLETENESS_SYSTEM_PROMPT = """You are a legal retrieval planner for Nepali law and business registration.
 Inspect the user's question and the retrieved Provisions and Procedures.
@@ -79,7 +79,7 @@ def _summarize_context(
         h = ch.get("hierarchy", {})
         sec = h.get("sec", "?")
         act = ch.get("act_source", "")
-        text = ch.get("text", "").replace("\n", " ")[:_MAX_SNIPPET_CHARS]
+        text = ch.get("text", "").replace("\n", " ")[:_MAX_PROVISION_PREVIEW_CHARS]
         lines.append(f"{idx}. [{act} दफा {sec}] {text}")
 
     if graph:
@@ -236,7 +236,10 @@ class IterativeRetriever:
                 if len(collected_chunks) >= self.max_provisions:
                     continue
                 q = str(action.get("query") or default_query)
-                top_k = min(int(action.get("top_k", 6)), 8)
+                try:
+                    top_k = max(1, min(int(action.get("top_k", 6)), 8))
+                except (TypeError, ValueError):
+                    top_k = 6
                 add_chunks(self._rag.search_clauses(q, top_k=top_k))
             elif tool == "search_graph":
                 q = str(action.get("query") or default_query)

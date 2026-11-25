@@ -275,7 +275,7 @@ class LegalAgent:
 
         if intent == IntentType.PROCEDURAL:
             return self._handle_procedural(
-                query, retrieval_query, session, step_lang, lang, sid, on_step=on_step
+                query, retrieval_query, session, lang, sid, on_step=on_step
             )
 
         if intent == IntentType.DOCUMENT_PREP:
@@ -344,35 +344,33 @@ class LegalAgent:
         query: str,
         retrieval_query: str,
         session: SessionState,
-        step_lang: str,
         lang: str,
         sid: str,
         on_step: Callable[[str, str], None] | None = None,
     ) -> AgentResponse:
-        """Start or continue a procedure walk-through."""
-        if self._navigator is None:
-            # No graph → fall back to RAG for procedural text
-            return self._handle_legal_fact(
-                query, retrieval_query, session, lang, sid, on_step=on_step
+        """Handle a procedural query by combining Neo4j Procedure search and Qdrant Provision search."""
+        try:
+            result = self._run_iterative_rag(
+                query,
+                retrieval_query=retrieval_query,
+                lang=lang,
+                on_step=on_step,
             )
-
-        if on_step:
-            on_step("navigate", "Looking up matching procedure in Neo4j graph…")
-        nav_result = self._navigator.navigate(retrieval_query, session, advance=False)
-        if nav_result is None:
-            # Graph has no matching process → fall back to RAG
-            if on_step:
-                on_step("navigate_miss", "No exact graph procedure found — falling back to RAG…")
-            return self._handle_legal_fact(
-                query, retrieval_query, session, lang, sid, on_step=on_step
+            session.last_chunks = result.get("chunks", [])
+            return AgentResponse(
+                answer=result["answer"],
+                intent=IntentType.PROCEDURAL,
+                session_id=sid,
+                chunks=result.get("chunks", []),
+                graph=result.get("graph", []),
             )
-
-        return AgentResponse(
-            answer=ProcedureNavigator.format_step_text(nav_result, step_lang),
-            intent=IntentType.PROCEDURAL,
-            session_id=sid,
-            navigation=nav_result,
-        )
+        except Exception as exc:  # noqa: BLE001
+            logger.error("Procedural RAG pipeline failed: %s", exc)
+            return AgentResponse(
+                answer="माफ गर्नुहोस्, अहिले जवाफ दिन सकिएन। कृपया फेरि प्रयास गर्नुहोस्।",
+                intent=IntentType.PROCEDURAL,
+                session_id=sid,
+            )
 
     def _run_iterative_rag(
         self,
@@ -387,12 +385,16 @@ class LegalAgent:
             retrieval_query=retrieval_query,
             on_step=on_step,
         )
+        active_chunks = self._verifier.filter_active_provisions(retrieval.chunks)
         context = self._rag.assemble_context(
             query,
-            retrieval.chunks,
+            active_chunks,
             retrieval.graph,
             response_language=lang,
         )
+        has_gap = not retrieval.sufficient and bool(retrieval.missing.strip())
+        if has_gap:
+            context = f"{context}\n[Retrieval Gap: {retrieval.missing.strip()}]"
         if on_step:
             on_step("generate", "Generating grounded legal answer…")
         answer = self._llm.generate(RAG_SYSTEM_PROMPT, context)
@@ -401,8 +403,16 @@ class LegalAgent:
         verification = self._verifier.verify(
             answer, chunks=retrieval.chunks, graph=retrieval.graph
         )
+        final_answer = verification.answer
+        if has_gap:
+            gap_note = (
+                f"\n\nℹ️ नोट: उपलब्ध सन्दर्भमा सबै विवरण फेला परेन ({retrieval.missing.strip()})।"
+                if lang == "ne"
+                else f"\n\nℹ️ Note: Some details could not be fully retrieved ({retrieval.missing.strip()})."
+            )
+            final_answer = f"{final_answer.rstrip()}{gap_note}"
         return {
-            "answer": verification.answer,
+            "answer": final_answer,
             "chunks": retrieval.chunks,
             "graph": retrieval.graph,
             "context": context,

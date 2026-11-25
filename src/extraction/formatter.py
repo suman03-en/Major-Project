@@ -46,24 +46,50 @@ def extract_references(text, slug_prefix):
 MAX_CHUNK_CHARS = 1200
 
 
+def _split_at_whitespace(text: str, max_chars: int) -> list[str]:
+    """Split a single block exceeding max_chars on whitespace near max_chars."""
+    words = text.split()
+    if len(words) <= 1:
+        return [text]
+    parts: list[str] = []
+    current = ""
+    for word in words:
+        candidate = f"{current} {word}" if current else word
+        if current and len(candidate) > max_chars:
+            parts.append(current)
+            current = word
+        else:
+            current = candidate
+    if current:
+        parts.append(current)
+    return parts
+
+
 def _split_oversized_text(text: str, max_chars: int = MAX_CHUNK_CHARS) -> list[str]:
-    """Split text exceeding max_chars at Devanagari sentence boundaries ('।')."""
+    """Split text exceeding max_chars at Devanagari sentence boundaries ('।') or whitespace."""
     if len(text) <= max_chars:
         return [text]
 
     sentences = re.split(r'(?<=।)\s+', text)
-    if len(sentences) <= 1:
-        return [text]
-
-    segments: list[str] = []
-    current = ""
+    expanded: list[str] = []
     for sentence in sentences:
         if not sentence:
             continue
-        candidate = f"{current} {sentence}".strip() if current else sentence
+        if len(sentence) > max_chars:
+            expanded.extend(_split_at_whitespace(sentence, max_chars))
+        else:
+            expanded.append(sentence)
+
+    if len(expanded) <= 1:
+        return expanded or [text]
+
+    segments: list[str] = []
+    current = ""
+    for part in expanded:
+        candidate = f"{current} {part}".strip() if current else part
         if current and len(candidate) > max_chars:
             segments.append(current)
-            current = sentence
+            current = part
         else:
             current = candidate
     if current:
@@ -169,14 +195,6 @@ class RegexFormatter:
             )
             parent_id = "-".join(slug_parts[:-1]) if has_parent else None
 
-            status = self.act_metadata.get("status", "active")
-            effective_date = (
-                self.act_metadata.get("effective_date")
-                or self.act_metadata.get("date_commenced")
-                or self.act_metadata.get("date_published")
-            )
-            bs_year = self.act_metadata.get("bs_year")
-
             hierarchy = {}
             if self.current_ch is not None: hierarchy['ch'] = self.current_ch
             if self.current_ch_title: hierarchy['ch_title'] = self.current_ch_title
@@ -184,35 +202,22 @@ class RegexFormatter:
             if self.current_sec_title: hierarchy['sec_title'] = self.current_sec_title
             if self.current_sub is not None: hierarchy['sub'] = self.current_sub
             if self.current_clause is not None: hierarchy['clause'] = self.current_clause
-            
+
             segments = _split_oversized_text(text)
             for idx, seg_text in enumerate(segments, 1):
                 part_id = chunk_id if len(segments) == 1 else f"{chunk_id}-p{idx}"
-                chunk = {
-                    "id": part_id,
-                    "type": chunk_type,
-                    "hierarchy": hierarchy,
-                    "parent_id": parent_id,
-                    "status": status,
-                    "effective_date": effective_date,
-                    "bs_year": bs_year,
-                    "text": seg_text,
-                }
-                if idx == len(segments):
-                    if provisos:
-                        chunk["provisos"] = provisos
-                    if explanations:
-                        chunk["explanations"] = explanations
-
-                refs = extract_references(seg_text, self.slug_prefix)
-                if refs:
-                    chunk["refs"] = refs
-
-                chunk["stats"] = {
-                    "characters": len(seg_text),
-                    "tokens": max(1, len(seg_text) // 3),  # Devanagari-aware estimate
-                }
-                self.chunks.append(chunk)
+                is_last = idx == len(segments)
+                self.chunks.append(
+                    self._build_provision_chunk(
+                        chunk_id=part_id,
+                        chunk_type=chunk_type,
+                        hierarchy=hierarchy,
+                        parent_id=parent_id,
+                        text=seg_text,
+                        provisos=provisos if is_last else None,
+                        explanations=explanations if is_last else None,
+                    )
+                )
 
         in_front_matter = True
         seen_amendment_header = False
@@ -350,6 +355,45 @@ class RegexFormatter:
             "chunks": self.chunks
         }
 
+    def _build_provision_chunk(
+        self,
+        chunk_id: str,
+        chunk_type: str,
+        hierarchy: dict,
+        parent_id: str | None,
+        text: str,
+        provisos: list[str] | None = None,
+        explanations: list[str] | None = None,
+    ) -> dict:
+        """Assemble a Provision dict with shared temporal metadata, refs, and token stats."""
+        effective_date = (
+            self.act_metadata.get("effective_date")
+            or self.act_metadata.get("date_commenced")
+            or self.act_metadata.get("date_published")
+        )
+        chunk = {
+            "id": chunk_id,
+            "type": chunk_type,
+            "hierarchy": hierarchy,
+            "parent_id": parent_id,
+            "status": self.act_metadata.get("status", "active"),
+            "effective_date": effective_date,
+            "bs_year": self.act_metadata.get("bs_year"),
+            "text": text,
+        }
+        if provisos:
+            chunk["provisos"] = provisos
+        if explanations:
+            chunk["explanations"] = explanations
+        refs = extract_references(text, self.slug_prefix)
+        if refs:
+            chunk["refs"] = refs
+        chunk["stats"] = {
+            "characters": len(text),
+            "tokens": max(1, len(text) // 3),  # Devanagari-aware estimate
+        }
+        return chunk
+
     def _build_section_summaries(self):
         """Build one deterministic section_summary provision per Section (दफा)."""
         groups = {}
@@ -363,14 +407,6 @@ class RegexFormatter:
             ch = hierarchy.get("ch")
             key = (ch, sec)
             groups.setdefault(key, []).append(chunk)
-
-        status = self.act_metadata.get("status", "active")
-        effective_date = (
-            self.act_metadata.get("effective_date")
-            or self.act_metadata.get("date_commenced")
-            or self.act_metadata.get("date_published")
-        )
-        bs_year = self.act_metadata.get("bs_year")
 
         summaries = []
         for (ch, sec), group_chunks in groups.items():
@@ -397,22 +433,13 @@ class RegexFormatter:
             body = "\n".join(c["text"] for c in group_chunks)
             summary_text = f"{header}\n{body}"
 
-            summary_chunk = {
-                "id": summary_id,
-                "type": "section_summary",
-                "hierarchy": summary_hierarchy,
-                "parent_id": None,
-                "status": status,
-                "effective_date": effective_date,
-                "bs_year": bs_year,
-                "text": summary_text,
-            }
-            refs = extract_references(summary_text, self.slug_prefix)
-            if refs:
-                summary_chunk["refs"] = refs
-            summary_chunk["stats"] = {
-                "characters": len(summary_text),
-                "tokens": max(1, len(summary_text) // 3),
-            }
-            summaries.append(summary_chunk)
+            summaries.append(
+                self._build_provision_chunk(
+                    chunk_id=summary_id,
+                    chunk_type="section_summary",
+                    hierarchy=summary_hierarchy,
+                    parent_id=None,
+                    text=summary_text,
+                )
+            )
         return summaries
