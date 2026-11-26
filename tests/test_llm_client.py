@@ -373,6 +373,43 @@ class TestRateLimitBackoffAndFailover(unittest.TestCase):
         self.assertEqual("".join(router.stream("sys", "hi")), "Recovered stream")
         self.assertEqual(sleeps, [2.0])
 
+    def test_fallbacks_inherit_primary_base_url_and_api_key_when_omitted(self) -> None:
+        from types import SimpleNamespace
+
+        cfg = SimpleNamespace(
+            LLM_BASE_URL="https://generativelanguage.googleapis.com/v1beta/openai",
+            LLM_API_KEY="gem-primary-key",
+            LLM_MODEL="gemini-3.5-flash-lite",
+            LLM_FALLBACKS=json.dumps(
+                [
+                    {"model": "gemini-3.1-flash-lite"},
+                    {
+                        "base_url": "https://api.groq.com/openai/v1",
+                        "api_key": "groq-key",
+                        "model": "llama-3.1-8b-instant",
+                    },
+                ]
+            ),
+            LLM_MAX_RETRIES=3,
+            LLM_RETRY_BASE_SECONDS=2.0,
+            LLM_RETRY_MAX_WAIT_SECONDS=30.0,
+        )
+        with patch("src.llm.llm_client.get_settings", return_value=cfg):
+            client = create_llm_client()
+        self.assertIsInstance(client, FallbackLLMClient)
+        assert isinstance(client, FallbackLLMClient)
+        self.assertEqual(len(client._clients), 3)
+        inherited = client._clients[1]
+        override = client._clients[2]
+        assert isinstance(inherited, StandardLLMClient)
+        assert isinstance(override, StandardLLMClient)
+        self.assertEqual(inherited.model, "gemini-3.1-flash-lite")
+        self.assertEqual(inherited._api_key, "gem-primary-key")
+        self.assertIn("generativelanguage.googleapis.com/v1beta/openai", inherited.endpoint)
+        self.assertEqual(override.model, "llama-3.1-8b-instant")
+        self.assertEqual(override._api_key, "groq-key")
+        self.assertIn("api.groq.com/openai/v1", override.endpoint)
+
 
 if __name__ == "__main__":
     unittest.main()

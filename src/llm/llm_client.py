@@ -513,18 +513,22 @@ def create_llm_client(
     ``LLM_FALLBACKS`` from :func:`~src.config.get_settings`.
     """
     settings = get_settings()
+    resolved_base_url = base_url if base_url is not None else settings.LLM_BASE_URL
+    resolved_api_key = api_key if api_key is not None else settings.LLM_API_KEY
+    resolved_model = model if model is not None else settings.LLM_MODEL
+
     fallback_entries = [
         fb
         for fb in _parse_fallbacks(getattr(settings, "LLM_FALLBACKS", ""))
-        if str(fb.get("base_url", "")).strip() and str(fb.get("model", "")).strip()
+        if str(fb.get("model", "")).strip()
     ]
     has_fallbacks = len(fallback_entries) > 0
     per_client_retries = 1 if has_fallbacks else None
 
     primary = StandardLLMClient(
-        base_url=base_url if base_url is not None else settings.LLM_BASE_URL,
-        api_key=api_key if api_key is not None else settings.LLM_API_KEY,
-        model=model if model is not None else settings.LLM_MODEL,
+        base_url=resolved_base_url,
+        api_key=resolved_api_key,
+        model=resolved_model,
         max_retries=per_client_retries,
     )
 
@@ -533,10 +537,12 @@ def create_llm_client(
 
     clients: list[BaseLLMClient] = [primary]
     for fb in fallback_entries:
+        fb_base = str(fb.get("base_url", "") or "").strip() or resolved_base_url
+        fb_key = str(fb.get("api_key", "") or "").strip() or resolved_api_key
         clients.append(
             StandardLLMClient(
-                base_url=str(fb["base_url"]).strip(),
-                api_key=str(fb.get("api_key", "")),
+                base_url=fb_base,
+                api_key=fb_key,
                 model=str(fb["model"]).strip(),
                 max_retries=1,
             )
