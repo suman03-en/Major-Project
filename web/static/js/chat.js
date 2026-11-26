@@ -208,7 +208,7 @@ export function createChatController({
             actions.appendChild(regenBtn);
         }
 
-        const citations = (data.citations && data.citations.length)
+        const citations = Array.isArray(data.citations)
             ? data.citations
             : (data.chunks || []).map(c => ({
                 label: `${c.act_source || ''}${c.hierarchy?.sec ? ', दफा ' + c.hierarchy.sec : ''}`,

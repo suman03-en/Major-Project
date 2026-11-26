@@ -76,8 +76,17 @@ _LEGAL_FACT_KW: frozenset[str] = frozenset(
         # English
         "section", "act", "clause", "subsection", "article",
         "law", "legal", "regulation", "provision", "penalty",
-        "fine", "right", "definition", "what is", "what does",
-        "define", "explain", "meaning of",
+        "fine", "right", "definition",
+    }
+)
+
+# Domain entity nouns used only when no procedural/legal keyword matched,
+# keeping pure procedural queries ("how to register a company") as PROCEDURAL.
+_DOMAIN_ENTITY_KW: frozenset[str] = frozenset(
+    {
+        "कम्पनी", "व्यवसाय", "व्यापार", "सञ्चालक", "शेयरधनी", "कर", "फर्म",
+        "byabasaya", "company", "business", "shareholder", "director",
+        "tax", "pan", "vat", "firm",
     }
 )
 
@@ -123,6 +132,7 @@ _PROCEDURAL_RE = _build_pattern(_PROCEDURAL_KW)
 _LEGAL_RE = _build_pattern(_LEGAL_FACT_KW)
 _DOCUMENT_RE = _build_pattern(_DOCUMENT_KW)
 _FOLLOW_UP_RE = _build_pattern(_FOLLOW_UP_KW)
+_DOMAIN_ENTITY_RE = _build_pattern(_DOMAIN_ENTITY_KW)
 
 
 class IntentClassifier:
@@ -190,7 +200,7 @@ class IntentClassifier:
             return IntentType.HYBRID
         if is_proc:
             return IntentType.PROCEDURAL
-        if is_legal:
+        if is_legal or _DOMAIN_ENTITY_RE.search(text):
             return IntentType.LEGAL_FACT
 
         return IntentType.UNKNOWN

@@ -21,6 +21,7 @@ Usage:
 
 import logging
 import math
+import re
 from collections.abc import Callable, Iterator
 from typing import Any
 
@@ -505,8 +506,38 @@ class RAGPipeline:
             lines.append(f"  सम्बन्धित कार्यालयहरू: {', '.join(missing_offices)}")
         return "\n".join(lines)
 
-    def format_citations(self, chunks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    @staticmethod
+    def _is_citation_used(
+        norm_answer: str, label: str, hierarchy: dict[str, Any]
+    ) -> bool:
+        """Return True if *label* or its section number is cited in *norm_answer*."""
+        if not norm_answer:
+            return False
+        norm_label = label.translate(str.maketrans("०१२३४५६७८९", "0123456789")).strip()
+        if norm_label and norm_label.lower() in norm_answer.lower():
+            return True
+        sec = hierarchy.get("sec")
+        if sec is not None:
+            sec_str = str(sec).translate(str.maketrans("०१२३४५६७८९", "0123456789")).strip()
+            if sec_str and re.search(
+                rf"(?:दफा|section|sec\.?|धारा)\s*{re.escape(sec_str)}\b",
+                norm_answer,
+                re.IGNORECASE,
+            ):
+                return True
+        return False
+
+    def format_citations(
+        self,
+        chunks: list[dict[str, Any]],
+        answer: str | None = None,
+    ) -> list[dict[str, Any]]:
         """Deduplicate retrieved Provisions and format readable citation metadata for UI pills."""
+        norm_answer = (
+            answer.translate(str.maketrans("०१२३४५६७८९", "0123456789"))
+            if answer is not None
+            else None
+        )
         formatted: list[dict[str, Any]] = []
         seen: set[tuple[Any, Any, Any, Any]] = set()
         for chunk in chunks:
@@ -516,10 +547,13 @@ class RAGPipeline:
             if key in seen:
                 continue
             seen.add(key)
+            label = self._format_citation(act, h)
+            if norm_answer is not None and not self._is_citation_used(norm_answer, label, h):
+                continue
             excerpt = " ".join(str(chunk.get("text", "")).split())[:280]
             formatted.append(
                 {
-                    "label": self._format_citation(act, h),
+                    "label": label,
                     "act_source": act,
                     "hierarchy": self._format_hierarchy(h),
                     "excerpt": excerpt,

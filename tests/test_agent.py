@@ -84,6 +84,10 @@ class TestIntentClassifier(unittest.TestCase):
         result = self.clf.classify("hello please tell me what is the weather today in kathmandu")
         self.assertNotEqual(result, IntentType.GREETING)
 
+    def test_generic_what_is_query_is_unknown_not_legal_fact(self):
+        self.assertEqual(self.clf.classify("what is python"), IntentType.UNKNOWN)
+        self.assertEqual(self.clf.classify("what is section 3?"), IntentType.LEGAL_FACT)
+
 
 # ---------------------------------------------------------------------------
 # 2. InMemorySessionStore
@@ -589,6 +593,8 @@ class TestLegalAgentRouting(unittest.TestCase):
         self.assertEqual(resp.intent, IntentType.LEGAL_FACT)
         primary_llm.generate.assert_not_called()
         self.assertIn("सन्दर्भ", resp.answer)
+        self.assertEqual(resp.chunks, [])
+        self.assertEqual(resp.citations, [])
 
 
 # ---------------------------------------------------------------------------
