@@ -1,0 +1,46 @@
+# ── Base: CUDA 12.1 runtime on Ubuntu 22.04 (On-demand GPU Surya OCR) ────────
+FROM nvidia/cuda:12.1.0-runtime-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3.11 \
+    python3.11-venv \
+    python3-pip \
+    libgl1 \
+    libglib2.0-0 \
+    libgomp1 \
+    ca-certificates \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN ln -sf /usr/bin/python3.11 /usr/bin/python
+
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+
+WORKDIR /app
+
+# ── Install GPU + Surya OCR dependencies ──────────────────────────────────────
+COPY requirements.txt .
+
+ENV UV_HTTP_TIMEOUT=300 \
+    UV_CONCURRENT_DOWNLOADS=2
+
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install --system -r requirements.txt \
+    --index-strategy unsafe-best-match
+
+# ── Copy project source ───────────────────────────────────────────────────────
+COPY . .
+RUN uv pip install --system --no-deps -e .
+
+# ── Entrypoint ────────────────────────────────────────────────────────────────
+COPY entrypoint.sh /entrypoint.sh
+RUN sed -i 's/\r$//' /entrypoint.sh && chmod +x /entrypoint.sh
+
+# Env vars for Surya OCR: small batch sizes for 4 GB VRAM (RTX 3050)
+ENV RECOGNITION_BATCH_SIZE=2
+ENV DETECTOR_BATCH_SIZE=2
+ENV TORCH_CUDA_ALLOC_CONF=expandable_segments:True
+
+ENTRYPOINT ["/entrypoint.sh"]
