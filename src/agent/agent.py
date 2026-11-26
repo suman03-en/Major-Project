@@ -35,6 +35,7 @@ from typing import TYPE_CHECKING, Any
 from src.agent.intent_classifier import IntentClassifier, IntentType
 from src.agent.iterative_retriever import IterativeRetriever
 from src.agent.procedure_navigator import NavigationResult, ProcedureNavigator
+from src.agent.query_transformer import QueryTransformer
 from src.agent.session_store import InMemorySessionStore, SessionState
 from src.agent.translator import QueryTranslator, detect_language, is_romanized_nepali
 from src.config import get_settings
@@ -187,6 +188,8 @@ class LegalAgent:
         iterative_retriever: IterativeRetriever | None = None,
         verifier: VerificationLayer | None = None,
         helper_llm_client: BaseLLMClient | None = None,
+        query_transformer: QueryTransformer | None = None,
+        enable_query_transform: bool | None = None,
     ) -> None:
         self._rag = rag_pipeline
         self._graph = graph_store
@@ -203,6 +206,15 @@ class LegalAgent:
 
         self._classifier = IntentClassifier()
         self._translator = translator or QueryTranslator(self._helper_llm)
+        self._query_transformer = query_transformer or QueryTransformer(self._helper_llm)
+        self._enable_query_transform = (
+            enable_query_transform
+            if enable_query_transform is not None
+            else (
+                get_settings().ENABLE_QUERY_TRANSFORM
+                and (use_env_helper or query_transformer is not None)
+            )
+        )
         self._translate_backoff_sec = translate_backoff_sec
         self._navigator = ProcedureNavigator(graph_store) if graph_store else None
         self._retriever = iterative_retriever or IterativeRetriever(
@@ -250,8 +262,8 @@ class LegalAgent:
         session: SessionState,
         regenerate: bool,
         on_step: Callable[[str, str], None] | None,
-    ) -> tuple[str, IntentType, str, list[dict[str, str]]]:
-        """Classify, optionally translate, and contextualize *query* against *session*."""
+    ) -> tuple[str, list[str], IntentType, str, list[dict[str, str]]]:
+        """Classify, optionally translate/transform, and contextualize *query* against *session*."""
         def _emit(stage: str, msg: str) -> None:
             if on_step:
                 on_step(stage, msg)
@@ -276,33 +288,49 @@ class LegalAgent:
             intent = self._classify_unknown_intent(query, history_dicts)
 
         retrieval_query = query
-        if (
-            intent not in (IntentType.GREETING, IntentType.FOLLOW_UP, IntentType.OUT_OF_SCOPE)
-            and lang != "ne"
-            and is_romanized_nepali(query)
-        ):
-            _emit("translate", "Translating Romanized Nepali query to Nepali…")
-            tr = self._translator.translate(query)
-            retrieval_query = tr.retrieval_query
-            if self._translate_backoff_sec > 0:
-                _emit("backoff", "Waiting 1s before next step…")
-                time.sleep(self._translate_backoff_sec)
-            lang = tr.language
-            if tr.was_translated:
-                _emit("translate_done", f"Translated ({lang} → ne): {retrieval_query}")
-                translated_intent = self._classifier.classify(
-                    retrieval_query,
-                    has_active_session=session.has_active_process,
-                )
-                if intent == IntentType.UNKNOWN:
-                    intent = translated_intent
+        search_queries: list[str] = [query]
 
-        if history_dicts and intent not in (IntentType.GREETING, IntentType.FOLLOW_UP, IntentType.OUT_OF_SCOPE):
-            _emit("contextualize", "Understanding follow-up from conversation history…")
-            retrieval_query = self._rewrite_query_with_history(retrieval_query, history_dicts)
+        if intent not in (IntentType.GREETING, IntentType.FOLLOW_UP, IntentType.OUT_OF_SCOPE):
+            if self._enable_query_transform:
+                base_query = (
+                    self._rewrite_query_with_history(query, history_dicts)
+                    if history_dicts
+                    else query
+                )
+                if history_dicts:
+                    _emit("contextualize", "Understanding follow-up from conversation history…")
+                tq = self._query_transformer.transform(base_query)
+                search_queries = tq.sub_queries
+                retrieval_query = search_queries[0]
+                _emit(
+                    "transform",
+                    f"Query ({tq.query_type.value}): {' | '.join(search_queries)}",
+                )
+            else:
+                if lang != "ne" and is_romanized_nepali(query):
+                    _emit("translate", "Translating Romanized Nepali query to Nepali…")
+                    tr = self._translator.translate(query)
+                    retrieval_query = tr.retrieval_query
+                    if self._translate_backoff_sec > 0:
+                        _emit("backoff", "Waiting 1s before next step…")
+                        time.sleep(self._translate_backoff_sec)
+                    lang = tr.language
+                    if tr.was_translated:
+                        _emit("translate_done", f"Translated ({lang} → ne): {retrieval_query}")
+                        translated_intent = self._classifier.classify(
+                            retrieval_query,
+                            has_active_session=session.has_active_process,
+                        )
+                        if intent == IntentType.UNKNOWN:
+                            intent = translated_intent
+
+                if history_dicts:
+                    _emit("contextualize", "Understanding follow-up from conversation history…")
+                    retrieval_query = self._rewrite_query_with_history(retrieval_query, history_dicts)
+                search_queries = [retrieval_query]
 
         _emit("route", f"Intent: {intent.value} (lang={lang})")
-        return retrieval_query, intent, lang, history_dicts
+        return retrieval_query, search_queries, intent, lang, history_dicts
 
     def respond(
         self,
@@ -321,7 +349,7 @@ class LegalAgent:
 
         step_cb = _emit if on_step is not None else None
         session = self._store.get_or_create(session_id or str(uuid.uuid4()))
-        retrieval_query, intent, lang, history_dicts = self._prepare_turn(
+        retrieval_query, search_queries, intent, lang, history_dicts = self._prepare_turn(
             query, session, regenerate, _emit
         )
         session.push_intent(intent)
@@ -342,6 +370,7 @@ class LegalAgent:
             lang=lang,
             on_step=step_cb,
             conversation_history=history_dicts,
+            search_queries=search_queries,
         )
         response.citations = self._format_citations_safe(response.chunks, response.answer)
         self._persist_turn(
@@ -404,7 +433,7 @@ class LegalAgent:
             step_events.append(("step", {"stage": stage, "message": msg}))
 
         session = self._store.get_or_create(session_id or str(uuid.uuid4()))
-        retrieval_query, intent, lang, history_dicts = self._prepare_turn(
+        retrieval_query, search_queries, intent, lang, history_dicts = self._prepare_turn(
             query, session, regenerate, _emit
         )
         session.push_intent(intent)
@@ -457,6 +486,7 @@ class LegalAgent:
                 lang=lang,
                 on_step=_emit,
                 conversation_history=history_dicts,
+                search_queries=search_queries,
             )
             for ev in step_events:
                 yield ev
@@ -465,9 +495,13 @@ class LegalAgent:
             yield ("final", _persist_and_build_final(resp.answer, resp.chunks, resp.graph, resp.navigation))
             return
 
-        retrieval = self._retriever.retrieve(
-            query, retrieval_query=retrieval_query, on_step=_emit
-        )
+        retrieve_kwargs: dict[str, Any] = {
+            "retrieval_query": retrieval_query,
+            "on_step": _emit,
+        }
+        if len(search_queries) > 1:
+            retrieve_kwargs["search_queries"] = search_queries
+        retrieval = self._retriever.retrieve(query, **retrieve_kwargs)
         for ev in step_events:
             yield ev
         step_events.clear()
@@ -547,6 +581,7 @@ class LegalAgent:
         lang: str,
         on_step: Callable[[str, str], None] | None = None,
         conversation_history: list[dict[str, str]] | None = None,
+        search_queries: list[str] | None = None,
     ) -> AgentResponse:
         """Dispatch to the appropriate subsystem based on *intent*."""
         sid = session.session_id
@@ -578,6 +613,7 @@ class LegalAgent:
                 sid,
                 on_step=on_step,
                 conversation_history=conversation_history,
+                search_queries=search_queries,
             )
 
         if intent == IntentType.DOCUMENT_PREP:
@@ -594,6 +630,7 @@ class LegalAgent:
                 sid,
                 on_step=on_step,
                 conversation_history=conversation_history,
+                search_queries=search_queries,
             )
 
         if intent == IntentType.HYBRID:
@@ -606,6 +643,7 @@ class LegalAgent:
                 sid,
                 on_step=on_step,
                 conversation_history=conversation_history,
+                search_queries=search_queries,
             )
 
         # Safety fallback
@@ -669,6 +707,7 @@ class LegalAgent:
         sid: str,
         on_step: Callable[[str, str], None] | None = None,
         conversation_history: list[dict[str, str]] | None = None,
+        search_queries: list[str] | None = None,
     ) -> AgentResponse:
         """Handle a procedural query by combining Neo4j Procedure search and Qdrant Provision search."""
         try:
@@ -678,6 +717,7 @@ class LegalAgent:
                 lang=lang,
                 on_step=on_step,
                 conversation_history=conversation_history,
+                search_queries=search_queries,
             )
             session.last_chunks = result.get("chunks", [])
             return AgentResponse(
@@ -745,13 +785,16 @@ class LegalAgent:
         lang: str,
         on_step: Callable[[str, str], None] | None = None,
         conversation_history: list[dict[str, str]] | None = None,
+        search_queries: list[str] | None = None,
     ) -> dict[str, Any]:
         """Run bounded iterative retrieval and synthesize a grounded answer."""
-        retrieval = self._retriever.retrieve(
-            query,
-            retrieval_query=retrieval_query,
-            on_step=on_step,
-        )
+        retrieve_kwargs: dict[str, Any] = {
+            "retrieval_query": retrieval_query,
+            "on_step": on_step,
+        }
+        if search_queries and len(search_queries) > 1:
+            retrieve_kwargs["search_queries"] = search_queries
+        retrieval = self._retriever.retrieve(query, **retrieve_kwargs)
         active_chunks = self._verifier.filter_active_provisions(retrieval.chunks)
         if not self._has_relevant_context(active_chunks, retrieval.graph):
             no_rel = (
@@ -819,6 +862,7 @@ class LegalAgent:
         sid: str,
         on_step: Callable[[str, str], None] | None = None,
         conversation_history: list[dict[str, str]] | None = None,
+        search_queries: list[str] | None = None,
     ) -> AgentResponse:
         """Run bounded iterative RAG and return a grounded legal answer."""
         try:
@@ -828,6 +872,7 @@ class LegalAgent:
                 lang=lang,
                 on_step=on_step,
                 conversation_history=conversation_history,
+                search_queries=search_queries,
             )
             session.last_chunks = result.get("chunks", [])
             return AgentResponse(
@@ -882,6 +927,7 @@ class LegalAgent:
         sid: str,
         on_step: Callable[[str, str], None] | None = None,
         conversation_history: list[dict[str, str]] | None = None,
+        search_queries: list[str] | None = None,
     ) -> AgentResponse:
         """Combined: procedural navigation + legal RAG answer."""
         nav_result = None
@@ -901,6 +947,7 @@ class LegalAgent:
                 lang=lang,
                 on_step=on_step,
                 conversation_history=conversation_history,
+                search_queries=search_queries,
             )
             session.last_chunks = rag_result.get("chunks", [])
             rag_answer = rag_result["answer"]

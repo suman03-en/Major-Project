@@ -91,6 +91,22 @@ def _summarize_context(
     return "\n".join(lines)
 
 
+def _fuse_rrf(
+    ranked_lists: list[list[dict[str, Any]]],
+    k: int = 60,
+) -> list[dict[str, Any]]:
+    """Fuse multiple ranked chunk lists using Reciprocal Rank Fusion (RRF)."""
+    scores: dict[str, float] = {}
+    by_id: dict[str, dict[str, Any]] = {}
+    for chunks in ranked_lists:
+        for rank, ch in enumerate(chunks, start=1):
+            cid = ch.get("chunk_id") or f"{ch.get('act_source', '')}:{ch.get('text', '')[:40]}"
+            by_id.setdefault(cid, ch)
+            scores[cid] = scores.get(cid, 0.0) + 1.0 / (k + rank)
+    ordered_ids = sorted(scores, key=lambda cid: scores[cid], reverse=True)
+    return [by_id[cid] for cid in ordered_ids]
+
+
 class IterativeRetriever:
     """Bounded iterative retrieval loop over ``RAGPipeline`` tools."""
 
@@ -114,6 +130,7 @@ class IterativeRetriever:
         query: str,
         retrieval_query: str | None = None,
         on_step: Callable[[str, str], None] | None = None,
+        search_queries: list[str] | None = None,
     ) -> RetrievalResult:
         """Run up to ``max_loops`` retrieval rounds, capping at ``max_provisions``."""
         def _emit(stage: str, msg: str) -> None:
@@ -121,6 +138,9 @@ class IterativeRetriever:
                 on_step(stage, msg)
 
         search_query = retrieval_query or query
+        queries = [q.strip() for q in (search_queries or []) if q and q.strip()]
+        if not queries:
+            queries = [search_query]
         collected_chunks: list[dict[str, Any]] = []
         collected_graph: list[dict[str, Any]] = []
         seen_chunk_ids: set[str] = set()
@@ -145,9 +165,13 @@ class IterativeRetriever:
                     seen_processes.add(pname)
                 collected_graph.append(proc)
 
-        # Loop 1: initial vector clause search + graph search
+        # Loop 1: initial vector clause search (single or RRF-fused multi-query) + graph search
         _emit("retrieve_loop", f"Retrieval loop 1/{self.max_loops}: searching legal clauses…")
-        _add_chunks(self._rag.search_clauses(search_query, top_k=8))
+        if len(queries) == 1:
+            _add_chunks(self._rag.search_clauses(queries[0], top_k=8))
+        else:
+            ranked_lists = [self._rag.search_clauses(q, top_k=5) for q in queries]
+            _add_chunks(_fuse_rrf(ranked_lists))
 
         if self._rag.use_graph and self._rag.graph_store:
             _emit("retrieve_graph", "Checking Neo4j knowledge graph for procedures…")

@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     OLLAMA_MODEL: str = "qwen2.5:3b"
     ENABLE_RERANK: bool = False
     USE_GRAPH: bool = False
+    ENABLE_QUERY_TRANSFORM: bool = True
     AGENT_MAX_LOOPS: int = 2
     AGENT_MAX_PROVISIONS: int = 8
     MAX_CONTEXT_TOKENS: int = 3500
