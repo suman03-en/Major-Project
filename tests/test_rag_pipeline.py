@@ -472,6 +472,44 @@ class TestRAGPipelineSeams(unittest.TestCase):
         self.assertEqual(citations[0]["status"], "active")
         self.assertIn("कम्पनी संस्थापना", citations[0]["excerpt"])
 
+    def test_format_citations_filters_to_only_used_sources_in_answer(self) -> None:
+        rag = RAGPipeline(
+            embedder=FakeEmbedder(),  # type: ignore[arg-type]
+            vector_store=FakeVectorStore([]),  # type: ignore[arg-type]
+            llm_client=FakeLLMClient(),
+            use_graph=False,
+        )
+        chunks = [
+            {
+                "chunk_id": "c1",
+                "act_source": "company_act_2063",
+                "hierarchy": {"sec": 3, "sub": 1},
+                "text": "कम्पनी संस्थापना सम्बन्धी व्यवस्था।",
+                "status": "active",
+            },
+            {
+                "chunk_id": "c2",
+                "act_source": "company_act_2063",
+                "hierarchy": {"sec": 43},
+                "text": "अर्को दफाको व्यवस्था।",
+                "status": "active",
+            },
+            {
+                "chunk_id": "c3",
+                "act_source": "company_act_2063",
+                "hierarchy": {"sec": 99},
+                "text": "असम्बन्धित दफा।",
+                "status": "active",
+            },
+        ]
+        answer = "कम्पनी ऐन, २०६३, दफा ३(१) अनुसार कम्पनी संस्थापना गर्न सकिन्छ।"
+        citations = rag.format_citations(chunks, answer=answer)
+        self.assertEqual(len(citations), 1)
+        self.assertIn("दफा 3", citations[0]["label"])
+
+        no_cite_answer = "उपलब्ध सन्दर्भमा यस प्रश्नको पर्याप्त जानकारी छैन।"
+        self.assertEqual(rag.format_citations(chunks, answer=no_cite_answer), [])
+
 
 if __name__ == "__main__":
     unittest.main()

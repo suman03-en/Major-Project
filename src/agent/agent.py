@@ -343,7 +343,7 @@ class LegalAgent:
             on_step=step_cb,
             conversation_history=history_dicts,
         )
-        response.citations = self._format_citations_safe(response.chunks)
+        response.citations = self._format_citations_safe(response.chunks, response.answer)
         self._persist_turn(
             session,
             query=query,
@@ -373,13 +373,18 @@ class LegalAgent:
             session.add_message("assistant", answer, citations=citations, steps=steps)
         self._store.save(session)
 
-    def _format_citations_safe(self, chunks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def _format_citations_safe(
+        self, chunks: list[dict[str, Any]], answer: str | None = None
+    ) -> list[dict[str, Any]]:
         """Format deduplicated UI citations when the pipeline supports it."""
         if not chunks:
             return []
         formatter = getattr(self._rag, "format_citations", None)
         if callable(formatter):
-            res = formatter(chunks)
+            try:
+                res = formatter(chunks, answer=answer)
+            except TypeError:
+                res = formatter(chunks)
             if isinstance(res, list):
                 return res
         return []
@@ -413,7 +418,7 @@ class LegalAgent:
             graph: list[dict[str, Any]],
             nav: NavigationResult | None = None,
         ) -> dict[str, Any]:
-            citations = self._format_citations_safe(chunks)
+            citations = self._format_citations_safe(chunks, answer_text)
             session.last_chunks = chunks
             self._persist_turn(
                 session,
@@ -475,7 +480,7 @@ class LegalAgent:
                 else _NO_RELEVANT_PROVISIONS_EN
             )
             yield ("token", {"text": no_rel})
-            yield ("final", _persist_and_build_final(no_rel, retrieval.chunks, retrieval.graph))
+            yield ("final", _persist_and_build_final(no_rel, [], retrieval.graph))
             return
 
         context = self._rag.assemble_context(
@@ -756,7 +761,7 @@ class LegalAgent:
             )
             return {
                 "answer": no_rel,
-                "chunks": retrieval.chunks,
+                "chunks": [],
                 "graph": retrieval.graph,
                 "context": "",
                 "verification": None,
