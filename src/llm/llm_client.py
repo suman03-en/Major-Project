@@ -74,7 +74,11 @@ def _extract_reset_seconds(headers: Any) -> float | None:
     """Extract wait duration in seconds from standard rate-limit response headers."""
     if headers is None:
         return None
-    for key in ("Retry-After", "x-ratelimit-reset-tokens", "x-ratelimit-reset-requests"):
+    for key in (
+        "Retry-After",
+        "x-ratelimit-reset-tokens",
+        "x-ratelimit-reset-requests",
+    ):
         raw = headers.get(key) if hasattr(headers, "get") else None
         parsed = _parse_duration_seconds(raw)
         if parsed is not None:
@@ -96,7 +100,9 @@ def _normalize_completions_url(base_url: str) -> str:
     """Normalize a base URL into a ``.../chat/completions`` endpoint."""
     cleaned = base_url.strip().rstrip("/")
     if not cleaned:
-        raise ValueError("LLM_BASE_URL is required (e.g. https://api.groq.com/openai/v1).")
+        raise ValueError(
+            "LLM_BASE_URL is required (e.g. https://api.groq.com/openai/v1)."
+        )
     if cleaned.endswith("/chat/completions"):
         return cleaned
     return f"{cleaned}/chat/completions"
@@ -162,7 +168,7 @@ class StandardLLMClient:
         model: str | None = None,
         max_retries: int | None = None,
         temperature: float = 0.3,
-        timeout: int = 60,
+        timeout: int = 30,
         retry_base_seconds: float | None = None,
         retry_max_wait_seconds: float | None = None,
         sleep_fn: Callable[[float], None] | None = None,
@@ -264,15 +270,29 @@ class StandardLLMClient:
             kind = "stream HTTP" if is_stream else "HTTP"
             logger.warning(
                 "LLM %s %d (%s, attempt %d/%d): %s. Retrying in %.2fs...",
-                kind, err.code, self.model, attempt, self.max_retries, snippet, wait_time,
+                kind,
+                err.code,
+                self.model,
+                attempt,
+                self.max_retries,
+                snippet,
+                wait_time,
             )
             (self._sleep or time.sleep)(wait_time)
             return None
         logger.error(
             "LLM %sfailed after %d attempts (%s, HTTP %d): %s",
-            "streaming " if is_stream else "", attempt, self.model, err.code, snippet,
+            "streaming " if is_stream else "",
+            attempt,
+            self.model,
+            err.code,
+            snippet,
         )
-        prefix = "\n[Error: streaming failed" if is_stream else "[Error: LLM generation failed"
+        prefix = (
+            "\n[Error: streaming failed"
+            if is_stream
+            else "[Error: LLM generation failed"
+        )
         return f"{prefix} — HTTP {err.code}: {snippet}]"
 
     def generate(
@@ -294,7 +314,12 @@ class StandardLLMClient:
                 err_msg = self._handle_http_error(e, attempt, is_stream=False)
                 if err_msg is not None:
                     return err_msg
-            except (urllib.error.URLError, json.JSONDecodeError, KeyError, OSError) as e:
+            except (
+                urllib.error.URLError,
+                json.JSONDecodeError,
+                KeyError,
+                OSError,
+            ) as e:
                 logger.error("LLM request failed (%s): %s", self.model, e)
                 return f"[Error: LLM generation failed — {e}]"
 
@@ -331,7 +356,12 @@ class StandardLLMClient:
             except urllib.error.HTTPError as e:
                 if yielded_any:
                     body = e.read().decode("utf-8", errors="replace")
-                    logger.error("LLM streaming failed mid-stream (%s, HTTP %d): %s", self.model, e.code, body[:200])
+                    logger.error(
+                        "LLM streaming failed mid-stream (%s, HTTP %d): %s",
+                        self.model,
+                        e.code,
+                        body[:200],
+                    )
                     yield f"\n[Error: streaming failed — HTTP {e.code}: {body[:200]}]"
                     return
                 err_msg = self._handle_http_error(e, attempt, is_stream=True)
@@ -388,15 +418,26 @@ class FallbackLLMClient:
 
     def _ordered_indices(self) -> list[int]:
         now = self._clock()
-        healthy = [i for i in range(len(self._clients)) if self._cooldown_until.get(i, 0.0) <= now]
+        healthy = [
+            i
+            for i in range(len(self._clients))
+            if self._cooldown_until.get(i, 0.0) <= now
+        ]
         cooled = sorted(
-            (i for i in range(len(self._clients)) if self._cooldown_until.get(i, 0.0) > now),
+            (
+                i
+                for i in range(len(self._clients))
+                if self._cooldown_until.get(i, 0.0) > now
+            ),
             key=lambda i: self._cooldown_until[i],
         )
         return healthy + cooled
 
     def _mark_failed(self, idx: int, reason: str) -> None:
-        is_auth = any(tok in reason for tok in ("401", "403", "Invalid API Key", "tier_not_allowed"))
+        is_auth = any(
+            tok in reason
+            for tok in ("401", "403", "Invalid API Key", "tier_not_allowed")
+        )
         duration = self._auth_cooldown_seconds if is_auth else self._cooldown_seconds
         self._cooldown_until[idx] = self._clock() + duration
         logger.warning(
@@ -408,10 +449,12 @@ class FallbackLLMClient:
 
     def _should_retry_exhausted(self, round_idx: int, last_error: str) -> bool:
         """Wait and return True if another pass over all endpoints should run."""
-        if round_idx >= self._max_exhausted_retries or _is_single_request_over_limit(last_error):
+        if round_idx >= self._max_exhausted_retries or _is_single_request_over_limit(
+            last_error
+        ):
             return False
         wait_time = min(
-            self._retry_base_seconds * (2 ** round_idx),
+            self._retry_base_seconds * (2**round_idx),
             self._retry_max_wait_seconds,
         )
         logger.warning(
@@ -435,7 +478,9 @@ class FallbackLLMClient:
             for idx in self._ordered_indices():
                 client = self._clients[idx]
                 try:
-                    result = client.generate(system_prompt, user_message, temperature=temperature)
+                    result = client.generate(
+                        system_prompt, user_message, temperature=temperature
+                    )
                 except Exception as e:  # noqa: BLE001
                     last_error = f"[Error: LLM generation failed — {e}]"
                     self._mark_failed(idx, str(e))
@@ -466,7 +511,11 @@ class FallbackLLMClient:
             for idx in self._ordered_indices():
                 client = self._clients[idx]
                 try:
-                    it = iter(client.stream(system_prompt, user_message, temperature=temperature))
+                    it = iter(
+                        client.stream(
+                            system_prompt, user_message, temperature=temperature
+                        )
+                    )
                     first = next(it, None)
                 except Exception as e:  # noqa: BLE001
                     last_error = f"\n[Error: streaming failed — {e}]"
@@ -497,7 +546,9 @@ def _parse_fallbacks(raw_json: str) -> list[dict[str, str]]:
         return []
     parsed = json.loads(raw_json)
     if not isinstance(parsed, list):
-        raise TypeError("LLM_FALLBACKS must be a JSON array of {base_url, api_key, model} objects.")
+        raise TypeError(
+            "LLM_FALLBACKS must be a JSON array of {base_url, api_key, model} objects."
+        )
     return [entry for entry in parsed if isinstance(entry, dict)]
 
 
@@ -558,7 +609,9 @@ def create_llm_client(
         clients,
         max_exhausted_retries=max(0, max_retries - 1),
         retry_base_seconds=float(getattr(settings, "LLM_RETRY_BASE_SECONDS", 2.0)),
-        retry_max_wait_seconds=float(getattr(settings, "LLM_RETRY_MAX_WAIT_SECONDS", 60.0)),
+        retry_max_wait_seconds=float(
+            getattr(settings, "LLM_RETRY_MAX_WAIT_SECONDS", 60.0)
+        ),
     )
 
 
