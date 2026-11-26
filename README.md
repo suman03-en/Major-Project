@@ -22,31 +22,31 @@ For a detailed breakdown of the system architecture, workflows, and a file-by-fi
 
 ## 🚀 Docker Setup (Recommended)
 
-Using Docker is the easiest way to run the pipeline. 
+The Docker stack decouples **CPU-only web/RAG serving** (default, fast build) from **GPU-accelerated Surya OCR** (on-demand `--profile gpu`):
 
-### 1. Build and Start Services
-Start Qdrant, Neo4j, and the RAG container in the background:
+### 1. Default CPU Stack (Web App + Qdrant + Neo4j)
+Start Qdrant, Neo4j, and the slim CPU-only `rag` container (uses `requirements-dev.txt`, no CUDA downloads or NVIDIA Container Toolkit required):
 ```bash
-docker compose up -d
+docker compose up -d --build
 ```
 
-### 2. Interactive Search & Graph Query (Crucial Step)
-You **must** use the interactive TTY flag (`-it`) when exec-ing into the running container to allow keyboard input:
+### 2. On-Demand GPU Extraction (Surya OCR)
+When extracting scanned Nepali PDFs on an NVIDIA GPU, use the `gpu` profile (`Dockerfile.gpu` + `requirements.txt` with `torch==2.6.0+cu121` pinned to PyTorch's CDN to avoid `pypi.nvidia.com` timeouts):
 ```bash
-# For Vector Search:
+docker compose --profile gpu run --rm ocr python -m src.cli.pdf_extractor
+```
+Extracted files are written to `./extracted_jsons/`, which is shared with the `rag` container.
+
+### 3. Interactive Search, Web UI & Pipeline Commands
+You **must** use `-it` when exec-ing into the running container for interactive CLI menus:
+```bash
+# Vector Search:
 docker compose exec -it rag python -m src.cli.search
 
-# For Graph Query:
+# Graph Query:
 docker compose exec -it rag python -m src.cli.query_graph
 ```
 
-### 3. Pipeline Commands via Docker Exec
-You can run individual pipeline stages directly inside the running container:
-
-* **Extract PDFs to JSON:**
-  ```bash
-  docker compose exec rag python -m src.cli.pdf_extractor
-  ```
 * **Embed & Ingest Datasets into Qdrant:**
   ```bash
   docker compose exec rag python -m src.cli.ingest
@@ -62,39 +62,20 @@ You can run individual pipeline stages directly inside the running container:
 
 ---
 
-## 💻 Local Installation Setup (Alternative)
+## 💻 Local Installation Setup (CPU Dev Environment)
 
-If you prefer running without Docker directly on your host machine:
+For local development, unit tests, `ruff` linting, and running the FastAPI web app without Docker, use **Python 3.12** with `requirements-dev.txt` (CPU-only PyTorch; Python 3.13 is avoided because `transformers==4.44.2` / `tokenizers` lacks prebuilt 3.13 wheels):
 
-### Prerequisites
-1. **Python 3.10+** installed.
-2. **Tesseract OCR** with the **Nepali (`nep`) language pack**.
-3. **Qdrant** running locally (`docker run -p 6333:6333 qdrant/qdrant`).
-4. **Neo4j** running locally (e.g., `neo4j:5-community` via docker).
-
-### Steps
-1. Create and activate a virtual environment:
-   ```cmd
-   python -m venv .venv
-   .\.venv\Scripts\activate
+1. Create a Python 3.12 virtual environment and install lightweight dev dependencies using [`uv`](https://docs.astral.sh/uv/):
+   ```powershell
+   uv venv .venv --python 3.12
+   uv pip install -r requirements-dev.txt --index-strategy unsafe-best-match
    ```
-2. Install the project dependencies (editable mode):
-   ```cmd
-   pip install -e .
-   ```
-3. Create a `.env` file based on `.env.example`:
-   ```env
-   QDRANT_URL="http://localhost:6333"
-   NEO4J_URI="bolt://localhost:7687"
-   NEO4J_USER="neo4j"
-   NEO4J_PASSWORD="neo4j_pass"
-   MISTRAL_API_KEY="your_api_key_here"
-   ```
-4. Run scripts using module execution:
-   ```cmd
-   python -m src.cli.pdf_extractor
-   python -m src.cli.ingest
-   python -m src.cli.ingest_graph
-   python -m src.cli.search
-   python -m src.cli.query_graph
+   *(Note: `--index-strategy unsafe-best-match` lets `uv` resolve packages across both PyPI and PyTorch's CPU wheel index.)*
+2. Copy `.env.example` to `.env` and fill in your LLM API keys (`LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL`, `LLM_HELPER_MODEL`).
+3. Run tests, linter, or the local web server:
+   ```powershell
+   .\.venv\Scripts\python.exe -m unittest discover -s tests -v
+   .\.venv\Scripts\ruff.exe check src/ web/ tests/
+   .\.venv\Scripts\uvicorn.exe web.main:app --reload
    ```

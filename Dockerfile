@@ -1,19 +1,13 @@
-# ── Base: CUDA 12.1 runtime on Ubuntu 22.04 ─────────────────────────────────
-# Matches the PyTorch cu121 wheel. Slim runtime image keeps the layer small;
-# the cuDNN/CUDA libs Surya needs come from torch itself at runtime.
-FROM nvidia/cuda:12.1.0-runtime-ubuntu22.04
+# ── Base: Slim Python 3.12 (CPU-only web/RAG runtime) ─────────────────────────
+FROM python:3.12-slim
 
-# Prevent interactive prompts during apt installs
 ENV DEBIAN_FRONTEND=noninteractive
 
 # System deps:
-#   libgl1 / libglib2.0-0  — OpenCV headless runtime (Surya dependency)
-#   libgomp1               — OpenMP for PyTorch CPU fallback
-#   ca-certificates, curl  — needed by uv install
+#   libgl1 / libglib2.0-0  — OpenCV/imaging runtime
+#   libgomp1               — OpenMP for PyTorch CPU inference
+#   ca-certificates, curl  — needed by healthchecks / HTTPS
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3.11 \
-    python3.11-venv \
-    python3-pip \
     libgl1 \
     libglib2.0-0 \
     libgomp1 \
@@ -21,39 +15,27 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Symlink python3.11 → python so scripts can call `python`
-RUN ln -sf /usr/bin/python3.11 /usr/bin/python
-
 # Copy uv binary from the official Astral uv image (fast, reproducible installs)
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
 WORKDIR /app
 
-# ── Install Python dependencies ───────────────────────────────────────────────
-# Copy requirements first so Docker can cache this layer when code changes.
-COPY requirements.txt .
+# ── Install Python dependencies (CPU-only PyTorch, no CUDA/surya-ocr) ─────────
+COPY requirements-dev.txt .
 
-# uv flags:
-#   --system                   install into the system Python (no venv inside container)
-#   --index-strategy unsafe-best-match  allows mixing PyPI + PyTorch CUDA index
 ENV UV_HTTP_TIMEOUT=300 \
     UV_CONCURRENT_DOWNLOADS=2
 
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv pip install --system -r requirements.txt \
+    uv pip install --system -r requirements-dev.txt \
     --index-strategy unsafe-best-match
 
 # ── Copy project source ───────────────────────────────────────────────────────
 COPY . .
-RUN uv pip install --system --no-cache-dir -e .
+RUN uv pip install --system --no-deps -e .
 
 # ── Entrypoint ────────────────────────────────────────────────────────────────
 COPY entrypoint.sh /entrypoint.sh
 RUN sed -i 's/\r$//' /entrypoint.sh && chmod +x /entrypoint.sh
-
-# Env vars for Surya OCR: small batch sizes for 4 GB VRAM (RTX 3050)
-ENV RECOGNITION_BATCH_SIZE=2
-ENV DETECTOR_BATCH_SIZE=2
-ENV TORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 ENTRYPOINT ["/entrypoint.sh"]

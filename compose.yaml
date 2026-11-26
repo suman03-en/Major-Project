@@ -49,11 +49,31 @@ services:
     environment:
       - ENABLE_RERANK=${ENABLE_RERANK:-false}
       - USE_GRAPH=${USE_GRAPH:-false}
-      # Surya OCR VRAM tuning for RTX 3050 4 GB
+    depends_on:
+      qdrant:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+
+  ocr:
+    build:
+      context: .
+      dockerfile: Dockerfile.gpu
+    container_name: ocr
+    profiles: ["gpu"]
+    stdin_open: true
+    tty: true
+    volumes:
+      - ./input_pdfs:/app/input_pdfs
+      - ./extracted_jsons:/app/extracted_jsons
+      - ./ner_outputs:/app/ner_outputs
+      - huggingface_cache:/root/.cache/huggingface
+    env_file:
+      - .env
+    environment:
       - RECOGNITION_BATCH_SIZE=2
       - DETECTOR_BATCH_SIZE=2
       - TORCH_CUDA_ALLOC_CONF=expandable_segments:True
-    # ── GPU passthrough (requires NVIDIA Container Toolkit on the host) ─────
     deploy:
       resources:
         reservations:
@@ -61,11 +81,6 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
-    depends_on:
-      qdrant:
-        condition: service_healthy
-      neo4j:
-        condition: service_healthy
 
 volumes:
   qdrant_storage:
