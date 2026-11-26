@@ -42,6 +42,7 @@ services:
       - ./extracted_jsons:/app/extracted_jsons
       - ./ner_outputs:/app/ner_outputs
       - ./datasets:/app/datasets
+      - ./data:/app/data
       - huggingface_cache:/root/.cache/huggingface
     env_file:
       - .env

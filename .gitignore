@@ -43,6 +43,9 @@ Thumbs.db
 # Vector store (local dev artifacts)
 vector_store/
 
+# Runtime chat history SQLite database
+data/
+
 # Scratch / test artifacts (development only)
 scratch_*.py
 test_ocr_*.py
