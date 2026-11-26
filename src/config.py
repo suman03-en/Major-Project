@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     AGENT_MAX_PROVISIONS: int = 8
     MAX_CONTEXT_TOKENS: int = 3500
     MAX_SIBLINGS_PER_SECTION: int = 2
+    MIN_RELEVANCE_SCORE: float = 0.28
     
     # Derived directory paths
     EXTRACTED_JSONS_DIR: str = ""

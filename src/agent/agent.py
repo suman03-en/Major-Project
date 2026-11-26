@@ -37,13 +37,14 @@ from src.agent.iterative_retriever import IterativeRetriever
 from src.agent.procedure_navigator import NavigationResult, ProcedureNavigator
 from src.agent.session_store import InMemorySessionStore, SessionState
 from src.agent.translator import QueryTranslator, detect_language, is_romanized_nepali
+from src.config import get_settings
 from src.llm.llm_client import (
     FallbackLLMClient,
     StandardLLMClient,
     create_helper_llm_client,
     handle_rate_limit_response,
 )
-from src.rag.rag_pipeline import RAG_SYSTEM_PROMPT
+from src.rag.rag_pipeline import RAG_SYSTEM_PROMPT, RELEVANCE_THRESHOLD
 from src.rag.verifier import VerificationLayer
 
 if TYPE_CHECKING:
@@ -82,6 +83,42 @@ _REWRITE_SYSTEM_PROMPT = (
     "to the specific Nepali Act, Section, or business procedure discussed. "
     "Return ONLY the rewritten search query (no quotes, no explanation)."
 )
+
+_OUT_OF_SCOPE_SYSTEM_PROMPT = (
+    "You classify whether a user query is in-scope for a Nepali Legal & Business Registration AI assistant.\n"
+    "In-scope (LEGAL): Nepali laws, Acts, Rules, Directives, business/company/tax/PAN/VAT registration, "
+    "procedures, government offices, fees, documents, or follow-ups to the recent legal conversation.\n"
+    "Out-of-scope (OUT_OF_SCOPE): general trivia, weather, sports, coding, math, jokes, personal chat, "
+    "or anything unrelated to Nepali law or administrative procedures.\n"
+    "Respond with ONLY one token: LEGAL or OUT_OF_SCOPE."
+)
+
+_OUT_OF_SCOPE_NE = (
+    "माफ गर्नुहोस्, म केवल **नेपाली कानून, व्यापार दर्ता प्रक्रिया र कानूनी कागजात** सम्बन्धी प्रश्नहरूमा मात्र मद्दत गर्न सक्छु।\n\n"
+    "कृपया नेपाली ऐन, नियमावली, कार्यविधि, वा व्यवसाय दर्ता सम्बन्धी प्रश्न सोध्नुहोस्।"
+)
+
+_OUT_OF_SCOPE_EN = (
+    "Sorry, I can only assist with **Nepali laws, business registration procedures, and legal documents**.\n\n"
+    "Please ask a question related to Nepali Acts, regulations, administrative procedures, or required documents."
+)
+
+_NO_RELEVANT_PROVISIONS_NE = (
+    "माफ गर्नुहोस्, उपलब्ध कानूनी सन्दर्भ (ज्ञान आधार) मा यस प्रश्नसँग सम्बन्धित पर्याप्त धारा वा कार्यविधि फेला परेन।\n\n"
+    "कृपया सम्बन्धित ऐन, कार्यविधि वा विषय स्पष्ट पारेर पुनः सोध्नुहोस्।"
+)
+
+_NO_RELEVANT_PROVISIONS_EN = (
+    "Sorry, no sufficiently relevant Nepali legal provisions or procedures were found in the knowledge base for this query.\n\n"
+    "Please rephrase or specify the relevant Act, regulation, or procedure."
+)
+
+
+def _effective_response_lang(query: str, lang: str) -> str:
+    """Return ``"ne"`` for Nepali or Romanized Nepali queries, else ``"en"``."""
+    if lang in ("ne", "roman") or is_romanized_nepali(query):
+        return "ne"
+    return "en"
 
 
 # ---------------------------------------------------------------------------
@@ -235,9 +272,12 @@ class LegalAgent:
             has_active_session=session.has_active_process,
         )
 
+        if intent == IntentType.UNKNOWN:
+            intent = self._classify_unknown_intent(query, history_dicts)
+
         retrieval_query = query
         if (
-            intent not in (IntentType.GREETING, IntentType.FOLLOW_UP)
+            intent not in (IntentType.GREETING, IntentType.FOLLOW_UP, IntentType.OUT_OF_SCOPE)
             and lang != "ne"
             and is_romanized_nepali(query)
         ):
@@ -257,7 +297,7 @@ class LegalAgent:
                 if intent == IntentType.UNKNOWN:
                     intent = translated_intent
 
-        if history_dicts and intent not in (IntentType.GREETING, IntentType.FOLLOW_UP):
+        if history_dicts and intent not in (IntentType.GREETING, IntentType.FOLLOW_UP, IntentType.OUT_OF_SCOPE):
             _emit("contextualize", "Understanding follow-up from conversation history…")
             retrieval_query = self._rewrite_query_with_history(retrieval_query, history_dicts)
 
@@ -428,6 +468,16 @@ class LegalAgent:
         step_events.clear()
 
         active_chunks = self._verifier.filter_active_provisions(retrieval.chunks)
+        if not self._has_relevant_context(active_chunks, retrieval.graph):
+            no_rel = (
+                _NO_RELEVANT_PROVISIONS_NE
+                if _effective_response_lang(query, lang) == "ne"
+                else _NO_RELEVANT_PROVISIONS_EN
+            )
+            yield ("token", {"text": no_rel})
+            yield ("final", _persist_and_build_final(no_rel, retrieval.chunks, retrieval.graph))
+            return
+
         context = self._rag.assemble_context(
             query,
             active_chunks,
@@ -499,7 +549,14 @@ class LegalAgent:
 
         if intent == IntentType.GREETING:
             return AgentResponse(
-                answer=_GREETING_NE if lang == "ne" else _GREETING_EN,
+                answer=_GREETING_NE if _effective_response_lang(query, lang) == "ne" else _GREETING_EN,
+                intent=intent,
+                session_id=sid,
+            )
+
+        if intent == IntentType.OUT_OF_SCOPE:
+            return AgentResponse(
+                answer=_OUT_OF_SCOPE_NE if _effective_response_lang(query, lang) == "ne" else _OUT_OF_SCOPE_EN,
                 intent=intent,
                 session_id=sid,
             )
@@ -633,6 +690,49 @@ class LegalAgent:
                 session_id=sid,
             )
 
+    def _classify_unknown_intent(
+        self, query: str, history_dicts: list[dict[str, str]]
+    ) -> IntentType:
+        """Use the helper LLM to distinguish legal/follow-up queries from out-of-scope ones."""
+        lines: list[str] = []
+        if history_dicts:
+            lines.append("Recent conversation:")
+            for msg in history_dicts[-4:]:
+                lines.append(f"{msg['role']}: {msg['content'][:200]}")
+            lines.append("")
+        lines.append(f"Current query: {query}")
+        try:
+            raw = self._helper_llm.generate(_OUT_OF_SCOPE_SYSTEM_PROMPT, "\n".join(lines))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Out-of-scope check failed (%s); failing open to LEGAL_FACT.", exc)
+            return IntentType.LEGAL_FACT
+
+        if not isinstance(raw, str) or not raw.strip() or raw.lstrip().startswith("[Error:"):
+            return IntentType.LEGAL_FACT
+        if "OUT_OF_SCOPE" in raw.strip().upper():
+            return IntentType.OUT_OF_SCOPE
+        return IntentType.LEGAL_FACT
+
+    @staticmethod
+    def _has_relevant_context(
+        chunks: list[dict[str, Any]], graph: list[dict[str, Any]]
+    ) -> bool:
+        """Return False when vector chunks exist but all fall below the relevance floor."""
+        if graph or not isinstance(chunks, list) or not chunks:
+            return True
+        scores = [
+            float(c["score"])
+            for c in chunks
+            if isinstance(c, dict) and isinstance(c.get("score"), (int, float))
+        ]
+        if not scores:
+            return True
+        settings = get_settings()
+        threshold = (
+            RELEVANCE_THRESHOLD if settings.ENABLE_RERANK else settings.MIN_RELEVANCE_SCORE
+        )
+        return max(scores) >= threshold
+
     def _run_iterative_rag(
         self,
         query: str,
@@ -648,6 +748,20 @@ class LegalAgent:
             on_step=on_step,
         )
         active_chunks = self._verifier.filter_active_provisions(retrieval.chunks)
+        if not self._has_relevant_context(active_chunks, retrieval.graph):
+            no_rel = (
+                _NO_RELEVANT_PROVISIONS_NE
+                if _effective_response_lang(query, lang) == "ne"
+                else _NO_RELEVANT_PROVISIONS_EN
+            )
+            return {
+                "answer": no_rel,
+                "chunks": retrieval.chunks,
+                "graph": retrieval.graph,
+                "context": "",
+                "verification": None,
+            }
+
         context = self._rag.assemble_context(
             query,
             active_chunks,

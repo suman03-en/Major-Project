@@ -71,6 +71,19 @@ class TestIntentClassifier(unittest.TestCase):
         result = self.clf.classify("abcdef xyz 123")
         self.assertEqual(result, IntentType.UNKNOWN)
 
+    def test_greeting_word_boundary_does_not_match_substrings(self):
+        # "which" contains "hi"; "karyabidi" / "act" must not trigger GREETING
+        self.assertNotEqual(self.clf.classify("which act applies here?"), IntentType.GREETING)
+        self.assertNotEqual(self.clf.classify("act bhanda aru karyabidi k k chhan"), IntentType.GREETING)
+
+    def test_greeting_with_legal_query_does_not_return_greeting(self):
+        result = self.clf.classify("hi, how to register a company in nepal?")
+        self.assertEqual(result, IntentType.PROCEDURAL)
+
+    def test_long_sentence_with_greeting_is_not_greeting(self):
+        result = self.clf.classify("hello please tell me what is the weather today in kathmandu")
+        self.assertNotEqual(result, IntentType.GREETING)
+
 
 # ---------------------------------------------------------------------------
 # 2. InMemorySessionStore
@@ -460,6 +473,122 @@ class TestLegalAgentRouting(unittest.TestCase):
         self.assertEqual(finals[0]["answer"], "Hello Nepal.")
         self.assertEqual(len(finals[0]["citations"]), 1)
         self.assertEqual(len(store.get("conv-stream").messages), 2)  # type: ignore[union-attr]
+
+    def test_out_of_scope_query_skips_retrieval_and_main_llm(self):
+        from src.agent.agent import LegalAgent
+        from src.agent.session_store import InMemorySessionStore
+
+        primary_llm = MagicMock()
+        helper_llm = MagicMock()
+        helper_llm.generate.return_value = "OUT_OF_SCOPE"
+
+        mock_rag = MagicMock()
+        mock_rag.graph_store = None
+        mock_rag.llm_client = primary_llm
+        mock_rag.verifier = None
+
+        mock_retriever = MagicMock()
+        agent = LegalAgent(
+            rag_pipeline=mock_rag,
+            graph_store=None,
+            llm_client=primary_llm,
+            helper_llm_client=helper_llm,
+            session_store=InMemorySessionStore(),
+        )
+        agent._retriever = mock_retriever
+
+        resp = agent.respond("Who won the cricket world cup?", session_id="conv-oos")
+        self.assertEqual(resp.intent, IntentType.OUT_OF_SCOPE)
+        mock_retriever.retrieve.assert_not_called()
+        primary_llm.generate.assert_not_called()
+
+    def test_out_of_scope_romanized_nepali_replies_in_nepali(self):
+        from src.agent.agent import LegalAgent
+        from src.agent.session_store import InMemorySessionStore
+
+        primary_llm = MagicMock()
+        helper_llm = MagicMock()
+        helper_llm.generate.return_value = "OUT_OF_SCOPE"
+
+        mock_rag = MagicMock()
+        mock_rag.graph_store = None
+        mock_rag.llm_client = primary_llm
+        mock_rag.verifier = None
+
+        agent = LegalAgent(
+            rag_pipeline=mock_rag,
+            graph_store=None,
+            llm_client=primary_llm,
+            helper_llm_client=helper_llm,
+            session_store=InMemorySessionStore(),
+        )
+
+        resp = agent.respond("aaja mausam kasto chha?", session_id="conv-oos-ne")
+        self.assertEqual(resp.intent, IntentType.OUT_OF_SCOPE)
+        self.assertTrue(any("\u0900" <= ch <= "\u097F" for ch in resp.answer))
+
+    def test_unknown_query_helper_failure_fails_open_to_legal_fact(self):
+        from src.agent.agent import LegalAgent
+        from src.agent.iterative_retriever import RetrievalResult
+        from src.agent.session_store import InMemorySessionStore
+
+        primary_llm = MagicMock()
+        primary_llm.generate.return_value = "Grounded answer"
+        helper_llm = MagicMock()
+        helper_llm.generate.side_effect = RuntimeError("429 rate limit")
+
+        mock_rag = MagicMock()
+        mock_rag.graph_store = None
+        mock_rag.llm_client = primary_llm
+        mock_rag.verifier = None
+        mock_rag.assemble_context.return_value = "context"
+
+        mock_retriever = MagicMock()
+        mock_retriever.retrieve.return_value = RetrievalResult(chunks=[], graph=[], loops_used=1)
+
+        agent = LegalAgent(
+            rag_pipeline=mock_rag,
+            graph_store=None,
+            llm_client=primary_llm,
+            helper_llm_client=helper_llm,
+            session_store=InMemorySessionStore(),
+        )
+        agent._retriever = mock_retriever
+
+        resp = agent.respond("obscure query xyz", session_id="conv-fo")
+        self.assertEqual(resp.intent, IntentType.LEGAL_FACT)
+        mock_retriever.retrieve.assert_called_once()
+
+    def test_low_relevance_scores_skip_main_llm_generation(self):
+        from src.agent.agent import LegalAgent
+        from src.agent.iterative_retriever import RetrievalResult
+        from src.agent.session_store import InMemorySessionStore
+
+        primary_llm = MagicMock()
+        mock_rag = MagicMock()
+        mock_rag.graph_store = None
+        mock_rag.llm_client = primary_llm
+        mock_rag.verifier = None
+
+        mock_retriever = MagicMock()
+        mock_retriever.retrieve.return_value = RetrievalResult(
+            chunks=[{"chunk_id": "c-low", "score": 0.05, "text": "unrelated", "hierarchy": {}}],
+            graph=[],
+            loops_used=1,
+        )
+
+        agent = LegalAgent(
+            rag_pipeline=mock_rag,
+            graph_store=None,
+            llm_client=primary_llm,
+            session_store=InMemorySessionStore(),
+        )
+        agent._retriever = mock_retriever
+
+        resp = agent.respond("दफा ९९९ के भन्छ?", session_id="conv-low")
+        self.assertEqual(resp.intent, IntentType.LEGAL_FACT)
+        primary_llm.generate.assert_not_called()
+        self.assertIn("सन्दर्भ", resp.answer)
 
 
 # ---------------------------------------------------------------------------

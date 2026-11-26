@@ -31,6 +31,7 @@ class IntentType(str, Enum):
     DOCUMENT_PREP = "DOCUMENT_PREP"
     FOLLOW_UP = "FOLLOW_UP"
     HYBRID = "HYBRID"
+    OUT_OF_SCOPE = "OUT_OF_SCOPE"
     UNKNOWN = "UNKNOWN"
 
 
@@ -55,7 +56,7 @@ _PROCEDURAL_KW: frozenset[str] = frozenset(
         "विधि", "तरिका", "नियम", "पालना",
         # Romanized Nepali
         "darta", "prakriya", "praliya", "charan", "kasari", "kaha",
-        "garne", "tarika", "karyabidhi", "karyalaya",
+        "garne", "tarika", "karyabidhi", "karyabidi", "karyalaya",
         # English
         "register", "registration", "process", "procedure", "steps",
         "how to", "where to", "what to do", "workflow", "guideline",
@@ -68,7 +69,7 @@ _LEGAL_FACT_KW: frozenset[str] = frozenset(
         # Nepali
         "दफा", "ऐन", "धारा", "उपदफा", "खण्ड", "अनुच्छेद",
         "कानून", "नियमावली", "व्यवस्था", "परिभाषा", "अपराध",
-        "सजाय", "जरिमाना", "दण्ड", "हक", "अधिकार",
+        "सजाय", "जरिमाना", "जरिवाना", "दण्ड", "हक", "अधिकार",
         # Romanized Nepali
         "dafa", "ain", "dhara", "upadafa", "khanda", "kanun", "kanoon",
         "niyamawali", "sajaya", "jarimana", "adhikar",
@@ -107,11 +108,14 @@ _FOLLOW_UP_KW: frozenset[str] = frozenset(
     }
 )
 
-# Compile a single fast regex for each group (word boundary)
+# Compile a single fast regex for each group (word boundaries for ASCII terms)
 def _build_pattern(keywords: frozenset[str]) -> re.Pattern[str]:
     # Sort longest-first so overlapping phrases match correctly
-    escaped = [re.escape(kw) for kw in sorted(keywords, key=len, reverse=True)]
-    return re.compile("|".join(escaped), re.IGNORECASE | re.UNICODE)
+    parts: list[str] = []
+    for kw in sorted(keywords, key=len, reverse=True):
+        esc = re.escape(kw)
+        parts.append(rf"\b{esc}\b" if kw.isascii() else esc)
+    return re.compile("|".join(parts), re.IGNORECASE | re.UNICODE)
 
 
 _GREETING_RE = _build_pattern(_GREETING_KW)
@@ -165,14 +169,17 @@ class IntentClassifier:
             return IntentType.FOLLOW_UP
 
         is_greeting = bool(_GREETING_RE.search(text))
-        if is_greeting:
-            return IntentType.GREETING
-
         is_followup = bool(_FOLLOW_UP_RE.search(text))
         if is_followup and has_active_session:
             return IntentType.FOLLOW_UP
 
         is_doc = bool(_DOCUMENT_RE.search(text))
+        is_proc = bool(_PROCEDURAL_RE.search(text))
+        is_legal = bool(_LEGAL_RE.search(text))
+
+        if is_greeting and not (is_doc or is_proc or is_legal) and len(text.split()) <= 4:
+            return IntentType.GREETING
+
         if is_doc:
             return IntentType.DOCUMENT_PREP
 
