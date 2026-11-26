@@ -35,9 +35,12 @@ COPY requirements.txt .
 
 # uv flags:
 #   --system                   install into the system Python (no venv inside container)
-#   --no-cache-dir             keep image lean
 #   --index-strategy unsafe-best-match  allows mixing PyPI + PyTorch CUDA index
-RUN uv pip install --system --no-cache-dir -r requirements.txt \
+ENV UV_HTTP_TIMEOUT=300 \
+    UV_CONCURRENT_DOWNLOADS=2
+
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install --system -r requirements.txt \
     --index-strategy unsafe-best-match
 
 # ── Copy project source ───────────────────────────────────────────────────────
