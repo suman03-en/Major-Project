@@ -1,6 +1,7 @@
 import unittest
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import MagicMock
 
 from src.agent.agent import LegalAgent
 from src.agent.intent_classifier import IntentType
@@ -374,6 +375,31 @@ class TestLegalAgentIterativeWiring(unittest.TestCase):
         self.assertIn("fee schedule in Rule 5", resp.answer)
         # Generation prompt (last LLM call) also received the gap note in context
         self.assertIn("fee schedule in Rule 5", llm.calls[-1][1])
+
+    def test_multi_query_rrf_fuses_and_deduplicates_results(self) -> None:
+        from src.agent.iterative_retriever import IterativeRetriever
+
+        mock_rag = MagicMock()
+        mock_rag.use_graph = False
+        mock_rag.graph_store = None
+        mock_rag.search_clauses.side_effect = [
+            [_make_chunk("c-1", sec=1), _make_chunk("c-2", sec=2)],
+            [_make_chunk("c-2", sec=2), _make_chunk("c-3", sec=3)],
+        ]
+        retriever = IterativeRetriever(
+            mock_rag,
+            llm_client=MagicMock(),
+            max_loops=1,
+            max_provisions=5,
+        )
+        res = retriever.retrieve(
+            "original",
+            search_queries=["query 1", "query 2"],
+        )
+        ids = [c["chunk_id"] for c in res.chunks]
+        self.assertEqual(ids[0], "c-2")  # Appears in both lists -> highest RRF score
+        self.assertEqual(len(ids), 3)
+        self.assertEqual(mock_rag.search_clauses.call_count, 2)
 
 
 if __name__ == "__main__":

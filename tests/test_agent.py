@@ -596,6 +596,51 @@ class TestLegalAgentRouting(unittest.TestCase):
         self.assertEqual(resp.chunks, [])
         self.assertEqual(resp.citations, [])
 
+    def test_query_transform_emits_step_and_passes_search_queries(self):
+        from src.agent.agent import LegalAgent
+        from src.agent.iterative_retriever import RetrievalResult
+        from src.agent.session_store import InMemorySessionStore
+
+        primary_llm = MagicMock()
+        primary_llm.generate.return_value = "दफा ३ र ४३ अनुसार"
+        helper_llm = MagicMock()
+        helper_llm.generate.return_value = (
+            '{"query_type": "MULTI_PART", "sub_queries": ["दफा ३", "दफा ४३"]}'
+        )
+
+        mock_rag = MagicMock()
+        mock_rag.graph_store = None
+        mock_rag.llm_client = primary_llm
+        mock_rag.verifier = None
+        mock_rag.assemble_context.return_value = "context"
+
+        mock_retriever = MagicMock()
+        mock_retriever.retrieve.return_value = RetrievalResult(chunks=[], graph=[], loops_used=1)
+
+        agent = LegalAgent(
+            rag_pipeline=mock_rag,
+            graph_store=None,
+            llm_client=primary_llm,
+            helper_llm_client=helper_llm,
+            session_store=InMemorySessionStore(),
+            enable_query_transform=True,
+        )
+        agent._retriever = mock_retriever
+
+        steps: list[tuple[str, str]] = []
+        agent.respond(
+            "Compare section 3 and section 43",
+            session_id="conv-qt",
+            on_step=lambda s, m: steps.append((s, m)),
+        )
+        self.assertTrue(any(s == "transform" and "MULTI_PART" in m for s, m in steps))
+        mock_retriever.retrieve.assert_called_once_with(
+            "Compare section 3 and section 43",
+            retrieval_query="दफा ३",
+            on_step=mock_retriever.retrieve.call_args.kwargs["on_step"],
+            search_queries=["दफा ३", "दफा ४३"],
+        )
+
 
 # ---------------------------------------------------------------------------
 # 4. QueryTranslator
