@@ -175,7 +175,8 @@ class IterativeRetriever:
 
         if self._rag.use_graph and self._rag.graph_store:
             _emit("retrieve_graph", "Checking Neo4j knowledge graph for procedures…")
-            _add_graph(self._rag.search_graph(search_query, collected_chunks))
+            graph_query = " ".join(queries) if len(queries) > 1 else search_query
+            _add_graph(self._rag.search_graph(graph_query, collected_chunks))
 
         loops_used = 1
         sufficient = False

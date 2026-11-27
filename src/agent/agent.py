@@ -531,7 +531,7 @@ class LegalAgent:
         yield ("step", {"stage": "generate", "message": "Generating grounded legal answer…"})
         collected_steps.append("Generating grounded legal answer…")
 
-        stream_iter = iter(self._llm.stream(RAG_SYSTEM_PROMPT, context))
+        stream_iter = iter(self._llm.stream(RAG_SYSTEM_PROMPT, context, temperature=0.1))
         first = next(stream_iter, None)
         if first is None:
             final_answer = "माफ गर्नुहोस्, अहिले जवाफ दिन सकिएन।"
@@ -822,7 +822,7 @@ class LegalAgent:
             context = f"{context}\n[Retrieval Gap: {retrieval.missing.strip()}]"
         if on_step:
             on_step("generate", "Generating grounded legal answer…")
-        answer = self._llm.generate(RAG_SYSTEM_PROMPT, context)
+        answer = self._llm.generate(RAG_SYSTEM_PROMPT, context, temperature=0.1)
         rate_msg = handle_rate_limit_response(answer, lang, "answer generation")
         if rate_msg is not None:
             return {
