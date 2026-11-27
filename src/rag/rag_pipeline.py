@@ -88,6 +88,29 @@ def _infer_response_language(query: str, response_language: str | None) -> str:
     return "ne" if any(0x0900 <= ord(ch) <= 0x097F for ch in query) else "en"
 
 
+_DEVANAGARI_DIGITS = str.maketrans("०१२३४५६७८९", "0123456789")
+_QUERY_SECTION_RE = re.compile(
+    r"(?:दफा|धारा|section|sec\.?)\s*([०-९\d]+)",
+    re.IGNORECASE,
+)
+
+
+def _extract_section_numbers(query: str) -> list[int]:
+    """Extract explicit section numbers (ASCII or Devanagari) from *query*."""
+    seen: set[int] = set()
+    nums: list[int] = []
+    for match in _QUERY_SECTION_RE.finditer(query):
+        raw = match.group(1).translate(_DEVANAGARI_DIGITS)
+        try:
+            num = int(raw)
+        except ValueError:
+            continue
+        if num > 0 and num not in seen:
+            seen.add(num)
+            nums.append(num)
+    return nums
+
+
 # ---------------------------------------------------------------------------
 # RAG System Prompt (condensed for free-tier TPM efficiency)
 # ---------------------------------------------------------------------------
@@ -98,7 +121,8 @@ RULES:
 1. Synthesis: Combine scattered Provisions (दफा/उपदफा) and Procedural Steps into a clear, actionable answer. If context only partially covers the question, answer what is supported with exact citations and note remaining gaps. Only state "उपलब्ध सन्दर्भमा यस प्रश्नको पर्याप्त जानकारी छैन।" when no relevant Provisions or Procedures exist.
 2. Inline Citations (CRITICAL): Each Provision has a "📌 उद्धृत गर्नुहोस्" label. Cite ONLY that exact label inline right where the claim appears (e.g., "(कम्पनी ऐन, २०६३, दफा ३(१))")—never infer section/subsection numbers from cross-references inside the text body (e.g., "उपदफा (४) बमोजिम").
 3. Procedures & Details: Use numbered steps and include required documents (आवश्यक कागजातहरू), offices (सम्बन्धित कार्यालय), fees (दस्तुर/शुल्क), and time limits (समय सीमा).
-4. Language & Format: Reply concisely in the user's question language (Nepali or English), organized by process/act with bold key terms/offices/deadlines. Do NOT append a "स्रोत" or "Sources" list at the end—keep all citations inline."""
+4. Language & Format: Reply concisely in the user's question language (Nepali or English), organized by process/act with bold key terms/offices/deadlines. Do NOT append a "स्रोत" or "Sources" list at the end—keep all citations inline.
+5. Strict Grounding: Never invent or guess any day count, deadline, fee amount, or subsection number that does not appear verbatim in the provided Provisions or Procedural Steps. If a timeline or fee is missing, state that it is not in the retrieved context."""
 
 
 class RAGPipeline:
@@ -222,6 +246,23 @@ class RAGPipeline:
         """
         k = top_k or self.top_k
 
+        exact_hits: list[dict[str, Any]] = []
+        seen_exact_ids: set[str] = set()
+        for sec_num in _extract_section_numbers(query)[:2]:
+            fetched = self.fetch_section(sec_num, act_source=act_filter)
+            if not fetched and act_filter:
+                fetched = self.fetch_section(sec_num)
+            for ch in fetched:
+                if len(ch.get("text", "").strip()) < MIN_CHUNK_TEXT_LEN:
+                    continue
+                cid = ch.get("chunk_id") or f"{ch.get('act_source', '')}:{ch.get('text', '')[:40]}"
+                if cid in seen_exact_ids:
+                    continue
+                seen_exact_ids.add(cid)
+                exact_ch = dict(ch)
+                exact_ch["score"] = max(float(exact_ch.get("score", 0.0)), 1.0)
+                exact_hits.append(exact_ch)
+
         embeddings = self.embedder.embed_texts([query])
         query_dense = embeddings["dense_vecs"][0].tolist()
         query_sparse = embeddings["lexical_weights"][0]
@@ -251,8 +292,16 @@ class RAGPipeline:
         if self.reranker and results:
             results = self.reranker.rerank(query=query, candidates=results, top_k=k)
         else:
-            # Trim to top_k after filtering
             results = results[:k]
+
+        if exact_hits:
+            merged: list[dict[str, Any]] = list(exact_hits)
+            for r in results:
+                cid = r.get("chunk_id") or f"{r.get('act_source', '')}:{r.get('text', '')[:40]}"
+                if cid not in seen_exact_ids:
+                    seen_exact_ids.add(cid)
+                    merged.append(r)
+            results = merged[: max(k, len(exact_hits))]
 
         logger.info("Retrieved %d chunks for query: %s", len(results), query[:80])
         return results
@@ -864,7 +913,7 @@ class RAGPipeline:
 
         # 4. Generate answer
         _emit("generate", "Generating grounded legal answer…")
-        response = self.llm_client.generate(RAG_SYSTEM_PROMPT, context)
+        response = self.llm_client.generate(RAG_SYSTEM_PROMPT, context, temperature=0.1)
         rate_msg = handle_rate_limit_response(
             response, _infer_response_language(query, response_language), "RAG generation"
         )
@@ -930,7 +979,7 @@ class RAGPipeline:
         }
 
         # 4. Stream the LLM response
-        it = iter(self.llm_client.stream(RAG_SYSTEM_PROMPT, context))
+        it = iter(self.llm_client.stream(RAG_SYSTEM_PROMPT, context, temperature=0.1))
         first = next(it, None)
         if first is None:
             return

@@ -316,6 +316,24 @@ class TestVerificationPipelineIntegration(unittest.TestCase):
         self.assertNotIn("खारेज भएको दफा १० को पाठ", llm_agent.calls[-1][1])
         self.assertIn("Temporal Warning", resp.answer)
 
+    def test_ignores_generic_rules_headings_and_accepts_verbatim_cross_references(self) -> None:
+        chunks = [
+            {
+                "chunk_id": "c-132",
+                "act_source": "company_act_2063",
+                "hierarchy": {"sec": 132},
+                "status": "active",
+                "text": "दामासाही ऐन बमोजिम नियुक्त लिक्वीडेटरको प्रतिवेदन र दफा ८० अनुसार वार्षिक विवरण।",
+            }
+        ]
+        answer = (
+            "5. Conversion Rules (Private vs. Public)\n"
+            "दामासाही ऐन र दफा ८० र दफा १३२ बमोजिम (कम्पनी ऐन, २०६३, दफा 132)।"
+        )
+        res = VerificationLayer().verify(answer, chunks=chunks)
+        self.assertEqual(res.ungrounded_citations, [])
+        self.assertNotIn("Verification Notice", res.answer)
+
 
 if __name__ == "__main__":
     unittest.main()

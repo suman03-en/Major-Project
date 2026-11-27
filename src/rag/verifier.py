@@ -25,7 +25,7 @@ _NEPALI_ACT_PATTERN = re.compile(
 )
 
 _ENGLISH_ACT_PATTERN = re.compile(
-    r"\b([A-Z][A-Za-z&'-]*(?:\s+[A-Z][A-Za-z&'-]*){0,4}\s+(?:Act|Regulations?|Rules)(?:,?\s*\d{4})?)\b"
+    r"\b([A-Z][A-Za-z&'-]*(?:\s+[A-Z][A-Za-z&'-]*){0,4}\s+(?:(?:Act|Regulations?)(?:,?\s*\d{4})?|Rules,?\s*\d{4}))\b"
 )
 
 _NEPALI_GENERIC_PREFIXES = frozenset({
@@ -145,6 +145,13 @@ class VerificationLayer:
             sec = _to_int_section((chunk.get("hierarchy") or {}).get("sec"))
             if sec is not None:
                 sections.add(sec)
+            body = chunk.get("text")
+            if isinstance(body, str) and body:
+                for match in _SECTION_PATTERN.finditer(body):
+                    raw_num = match.group(1) or match.group(2)
+                    ref_sec = nepali_to_int(raw_num)
+                    if ref_sec is not None:
+                        sections.add(ref_sec)
 
         for proc in graph:
             for key in ("section", "sec"):
@@ -193,6 +200,11 @@ class VerificationLayer:
             h_act = (chunk.get("hierarchy") or {}).get("act_name")
             if isinstance(h_act, str) and h_act.strip():
                 candidates.append(h_act.strip())
+            body = chunk.get("text")
+            if isinstance(body, str) and body:
+                for pattern in (_NEPALI_ACT_PATTERN, _ENGLISH_ACT_PATTERN):
+                    for match in pattern.finditer(body):
+                        candidates.append(match.group(1).strip())
 
         for proc in graph:
             for key in ("act_source", "act_name", "process_name"):

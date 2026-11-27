@@ -401,6 +401,31 @@ class TestLegalAgentIterativeWiring(unittest.TestCase):
         self.assertEqual(len(ids), 3)
         self.assertEqual(mock_rag.search_clauses.call_count, 2)
 
+    def test_graph_process_matching_handles_nepali_inflections_and_multi_query(self) -> None:
+        from src.agent.iterative_retriever import IterativeRetriever
+        from src.knowledge_base.graph_store import Neo4jGraphStore
+
+        store = object.__new__(Neo4jGraphStore)
+        store.get_all_processes = MagicMock(return_value=["कम्पनी दर्ता", "कर दर्ता"])  # type: ignore[method-assign]
+        store.get_steps_for_process = MagicMock(return_value=[{"step_number": 1, "action": "आवेदन"}])  # type: ignore[method-assign]
+        store.get_documents_for_process = MagicMock(return_value=[])  # type: ignore[method-assign]
+        store.get_offices_for_process = MagicMock(return_value=[])  # type: ignore[method-assign]
+
+        matched = store.find_relevant_processes("कम्पनीको दर्तामा लाग्ने कागजात", [])
+        self.assertEqual(len(matched), 2)
+        self.assertEqual(matched[0]["process_name"], "कम्पनी दर्ता")
+
+        mock_rag = MagicMock()
+        mock_rag.use_graph = True
+        mock_rag.graph_store = MagicMock()
+        mock_rag.search_clauses.return_value = [_make_chunk("c-1", sec=4)]
+        mock_rag.search_graph.return_value = []
+        retriever = IterativeRetriever(mock_rag, llm_client=MagicMock(), max_loops=1)
+        retriever.retrieve("original", search_queries=["कम्पनी दर्ता कागजात", "कम्पनी दर्ता समयसीमा"])
+        graph_query_arg = mock_rag.search_graph.call_args[0][0]
+        self.assertIn("कागजात", graph_query_arg)
+        self.assertIn("समयसीमा", graph_query_arg)
+
 
 if __name__ == "__main__":
     unittest.main()

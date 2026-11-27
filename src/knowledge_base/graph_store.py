@@ -21,6 +21,18 @@ from neo4j import GraphDatabase, Transaction
 
 logger = logging.getLogger(__name__)
 
+_NEPALI_CASE_SUFFIXES = ("सम्बन्धी", "हरू", "हरु", "बाट", "लाई", "को", "का", "की", "मा", "ले")
+
+
+def _nepali_stem(word: str) -> str:
+    """Strip common Nepali postpositions/case suffixes from tokens longer than 4 chars."""
+    cleaned = word.strip(".,?!:;()[]\"'।")
+    for suffix in _NEPALI_CASE_SUFFIXES:
+        if len(cleaned) > len(suffix) + 2 and cleaned.endswith(suffix):
+            return cleaned[: -len(suffix)]
+    return cleaned
+
+
 class Neo4jGraphStore:
     """Wrapper around Neo4j driver for legal NER graph."""
 
@@ -304,10 +316,22 @@ class Neo4jGraphStore:
         ]
 
         if not matching_processes:
-            query_words = {w for w in query.split() if len(w) > 2}
+            query_stems = {_nepali_stem(w) for w in query.lower().split() if len(w) > 2}
+            scored: list[tuple[int, str]] = []
             for name in all_processes:
-                if query_words & set(name.split()):
-                    matching_processes.append(name)
+                proc_stems = {_nepali_stem(w) for w in name.lower().split() if len(w) > 1}
+                overlap = sum(
+                    1
+                    for ps in proc_stems
+                    if any(
+                        ps == qs or (len(ps) >= 3 and len(qs) >= 3 and (qs.startswith(ps) or ps.startswith(qs)))
+                        for qs in query_stems
+                    )
+                )
+                if overlap > 0:
+                    scored.append((overlap, name))
+            scored.sort(key=lambda pair: pair[0], reverse=True)
+            matching_processes = [name for _, name in scored]
 
         graph_results: list[dict[str, Any]] = []
         for process_name in matching_processes[:max_processes]:

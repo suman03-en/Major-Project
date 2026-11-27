@@ -510,6 +510,60 @@ class TestRAGPipelineSeams(unittest.TestCase):
         no_cite_answer = "उपलब्ध सन्दर्भमा यस प्रश्नको पर्याप्त जानकारी छैन।"
         self.assertEqual(rag.format_citations(chunks, answer=no_cite_answer), [])
 
+    def test_retrieve_chunks_prepends_exact_section_and_bypasses_reranker_drop(self) -> None:
+        from unittest.mock import MagicMock
+
+        vec_chunk = {
+            "chunk_id": "c-15",
+            "act_source": "company_act_2063",
+            "hierarchy": {"sec": 15},
+            "text": "दफा १५ को पाठ।",
+            "score": 0.5,
+        }
+        sec43_chunk = {
+            "chunk_id": "c-43",
+            "act_source": "company_act_2063",
+            "hierarchy": {"sec": 43},
+            "text": "शेयर दाखिल खारेज सम्बन्धी व्यवस्था।",
+            "score": 0.01,
+        }
+        fake_reranker = MagicMock()
+        # Simulate cross-encoder dropping sec43 because of English vs Nepali mismatch
+        fake_reranker.rerank.return_value = [vec_chunk]
+
+        rag = RAGPipeline(
+            embedder=FakeEmbedder(),  # type: ignore[arg-type]
+            vector_store=FakeVectorStore([vec_chunk]),  # type: ignore[arg-type]
+            llm_client=FakeLLMClient(),
+            reranker=fake_reranker,
+            use_graph=False,
+        )
+        rag.fetch_section = MagicMock(return_value=[sec43_chunk])  # type: ignore[method-assign]
+
+        results = rag.retrieve_chunks("What does Section 43 of the Companies Act say?", top_k=5)
+        self.assertEqual(results[0]["chunk_id"], "c-43")
+        self.assertGreaterEqual(results[0]["score"], 1.0)
+        rag.fetch_section.assert_called()
+
+    def test_answer_passes_low_temperature_and_strict_grounding_prompt(self) -> None:
+        from unittest.mock import MagicMock
+
+        from src.rag.rag_pipeline import RAG_SYSTEM_PROMPT
+
+        self.assertIn("verbatim", RAG_SYSTEM_PROMPT.lower())
+        llm = MagicMock()
+        llm.generate.return_value = "दफा ३ अनुसार।"
+        rag = RAGPipeline(
+            embedder=FakeEmbedder(),  # type: ignore[arg-type]
+            vector_store=FakeVectorStore([  # type: ignore[arg-type]
+                {"chunk_id": "c-3", "act_source": "company_act_2063", "hierarchy": {"sec": 3}, "text": "कम्पनी संस्थापना।", "score": 0.9}
+            ]),
+            llm_client=llm,
+            use_graph=False,
+        )
+        rag.answer("दफा ३ के भन्छ?")
+        self.assertEqual(llm.generate.call_args.kwargs.get("temperature"), 0.1)
+
 
 if __name__ == "__main__":
     unittest.main()
